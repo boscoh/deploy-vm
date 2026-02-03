@@ -1,17 +1,22 @@
 [project]
 name = "deploy-vm"
-version = "0.1.0"
+version = "0.1.2"
 requires-python = ">=3.10"
+readme = {file = "README.md", content-type = "text/markdown"}
 dependencies = [
     "cyclopts>=3.0.0",
-    "rich>=13.0.0",
+    "dnspython>=2.8.0",
     "fabric>=3.0.0",
+    "rich>=13.0.0",
     "ruff>=0.14.14",
 ]
+
+[project.scripts]
+deploy-vm = "deploy_vm:app"
+
+[project.urls]
+PyPI = "https://pypi.org/project/deploy-vm/"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-
-[project.scripts]
-deploy-vm = "deploy_vm:app"

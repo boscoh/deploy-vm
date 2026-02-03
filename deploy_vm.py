@@ -26,6 +26,7 @@ from textwrap import dedent
 from typing import Literal, Protocol
 
 import cyclopts
+import dns.resolver
 from fabric import Connection
 from rich import print
 
@@ -110,19 +111,94 @@ def ssh_write_file(ip: str, path: str, content: str, user: str = "root"):
 def rsync(
     local: str, ip: str, remote: str, exclude: list[str] = None, user: str = "root"
 ):
+    ssh_opts = (
+        "ssh -o StrictHostKeyChecking=no "
+        "-o UserKnownHostsFile=/dev/null "
+        "-o ServerAliveInterval=60 "
+        "-o ServerAliveCountMax=3 "
+        "-o TCPKeepAlive=yes "
+        "-o Compression=yes "
+        "-o LogLevel=ERROR"
+    )
+    
     cmd = [
         "rsync",
         "-avz",
         "--delete",
+        "--partial",
+        "--inplace",
+        "--no-whole-file",
+        "--block-size=8192",
         "-e",
-        "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null",
+        ssh_opts,
     ]
     for ex in exclude or []:
         cmd.extend(["--exclude", ex])
     cmd.extend([f"{local}/", f"{user}@{ip}:{remote}/"])
+    
     result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
+    if result.returncode == 0:
+        return
+    
+    if "Result too large" in result.stderr or "unexpected end of file" in result.stderr:
+        log("rsync failed with large file error, falling back to tar+ssh...")
+        _rsync_tar_fallback(local, ip, remote, exclude, user, ssh_opts)
+    else:
         error(f"rsync failed: {result.stderr}")
+
+
+def _rsync_tar_fallback(
+    local: str, ip: str, remote: str, exclude: list[str], user: str, ssh_opts: str
+):
+    """Fallback to tar+ssh for large transfers when rsync fails."""
+    import tempfile
+    
+    log("Creating tar archive...")
+    exclude_args = []
+    for ex in exclude or []:
+        exclude_args.extend(["--exclude", ex.lstrip("/")])
+    
+    with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
+        tar_cmd = [
+            "tar",
+            "-czf",
+            tmp.name,
+            "-C",
+            local,
+        ] + exclude_args + ["."]
+        result = subprocess.run(tar_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            error(f"tar creation failed: {result.stderr}")
+        tar_path = tmp.name
+    
+    try:
+        log("Uploading tar archive...")
+        remote_tar = f"/tmp/deploy_{int(time.time())}.tar.gz"
+        
+        scp_cmd = [
+            "scp",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "Compression=yes",
+            tar_path,
+            f"{user}@{ip}:{remote_tar}",
+        ]
+        result = subprocess.run(scp_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            error(f"scp upload failed: {result.stderr}")
+        
+        log("Extracting on remote server...")
+        extract_script = f"""
+            set -e
+            mkdir -p {remote}
+            cd {remote}
+            tar -xzf {remote_tar}
+            rm -f {remote_tar}
+        """
+        ssh_script(ip, extract_script, user=user)
+        log("Transfer complete")
+    finally:
+        Path(tar_path).unlink(missing_ok=True)
 
 
 def load_instance(name: str) -> dict:
@@ -137,6 +213,42 @@ def is_valid_ip(ip: str) -> bool:
     return len(parts) == 4 and all(
         part.isdigit() and 0 <= int(part) <= 255 for part in parts
     )
+
+
+def resolve_dns_a(domain: str, nameserver: str = "8.8.8.8") -> str | None:
+    """Resolve domain to IPv4 address using specified nameserver.
+    
+    :param domain: Domain name to resolve
+    :param nameserver: DNS nameserver IP (default: 8.8.8.8)
+    :return: First A record IP address, or None if resolution fails
+    """
+    try:
+        resolver = dns.resolver.Resolver()
+        resolver.nameservers = [nameserver]
+        answer = resolver.resolve(domain, "A")
+        return str(answer[0]) if answer else None
+    except Exception:
+        return None
+
+
+def check_http_status(url: str, timeout: int = 5) -> tuple[int | None, str]:
+    """Check HTTP/HTTPS status of a URL.
+    
+    :param url: URL to check (http:// or https://)
+    :param timeout: Connection timeout in seconds
+    :return: Tuple of (status_code, first_line_of_response) or (None, error_message)
+    """
+    try:
+        req = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            status_code = response.getcode()
+            return status_code, f"HTTP/{response.version} {status_code} {response.reason}"
+    except urllib.error.HTTPError as e:
+        return e.code, f"HTTP/{e.version} {e.code} {e.reason}"
+    except urllib.error.URLError as e:
+        return None, str(e)
+    except Exception as e:
+        return None, str(e)
 
 
 def resolve_ip(target: str) -> str:
@@ -614,51 +726,35 @@ def verify_instance(
 
     # DNS check (if domain provided)
     if domain:
-        try:
-            result = subprocess.run(
-                ["dig", "+short", domain, "@8.8.8.8"], capture_output=True, text=True
-            )
-            dns_ip = result.stdout.strip().split("\n")[0]
-            if dns_ip == ip:
-                print(f"[OK] DNS: {domain} -> {ip}")
-            else:
-                print(f"[FAIL] DNS: {domain} -> {dns_ip} (expected {ip})")
-                issues.append(f"DNS mismatch: {dns_ip} != {ip}")
-        except Exception as e:
-            print(f"[FAIL] DNS check: {e}")
+        dns_ip = resolve_dns_a(domain)
+        if dns_ip == ip:
+            print(f"[OK] DNS: {domain} -> {ip}")
+        elif dns_ip:
+            print(f"[FAIL] DNS: {domain} -> {dns_ip} (expected {ip})")
+            issues.append(f"DNS mismatch: {dns_ip} != {ip}")
+        else:
+            print(f"[FAIL] DNS: {domain} -> no A record found")
             issues.append("DNS check failed")
 
     # HTTP check
-    try:
-        result = subprocess.run(
-            ["curl", "-sI", "--connect-timeout", "5", f"http://{ip}"],
-            capture_output=True,
-            text=True,
-        )
-        if "200" in result.stdout or "301" in result.stdout or "302" in result.stdout:
-            print("[OK] HTTP: responding")
-        else:
-            first_line = result.stdout.split("\n")[0] if result.stdout else "no response"
-            print(f"[WARN] HTTP: {first_line}")
-    except Exception as e:
-        print(f"[FAIL] HTTP: {e}")
+    status_code, response_line = check_http_status(f"http://{ip}")
+    if status_code and status_code in [200, 301, 302]:
+        print("[OK] HTTP: responding")
+    elif status_code:
+        print(f"[WARN] HTTP: {response_line}")
+    else:
+        print(f"[FAIL] HTTP: {response_line}")
         issues.append("HTTP not responding")
 
     # HTTPS check (if domain provided)
     if domain:
-        try:
-            result = subprocess.run(
-                ["curl", "-sI", "--connect-timeout", "5", f"https://{domain}"],
-                capture_output=True,
-                text=True,
-            )
-            if "200" in result.stdout:
-                print(f"[OK] HTTPS: {domain} responding")
-            else:
-                first_line = result.stdout.split("\n")[0] if result.stdout else "no response"
-                print(f"[WARN] HTTPS: {first_line}")
-        except Exception as e:
-            print(f"[FAIL] HTTPS: {e}")
+        status_code, response_line = check_http_status(f"https://{domain}")
+        if status_code == 200:
+            print(f"[OK] HTTPS: {domain} responding")
+        elif status_code:
+            print(f"[WARN] HTTPS: {response_line}")
+        else:
+            print(f"[FAIL] HTTPS: {response_line}")
             issues.append("HTTPS not responding")
 
     print("-" * 40)
@@ -795,13 +891,7 @@ def ensure_dns_matches(
     domain: str, expected_ip: str, provider: ProviderName = "digitalocean"
 ) -> bool:
     """:return: True if DNS was updated, False if already correct"""
-    try:
-        result = subprocess.run(
-            ["dig", "+short", domain, "@8.8.8.8"], capture_output=True, text=True
-        )
-        current_ip = result.stdout.strip().split("\n")[0]
-    except Exception:
-        current_ip = ""
+    current_ip = resolve_dns_a(domain) or ""
 
     if current_ip == expected_ip:
         return False
@@ -946,16 +1036,10 @@ def setup_nginx_ssl(
 
     log("Verifying DNS...")
     for i in range(DNS_VERIFY_RETRIES):
-        try:
-            result = subprocess.run(
-                ["dig", "+short", domain, "@8.8.8.8"], capture_output=True, text=True
-            )
-            resolved = result.stdout.strip().split("\n")[0]
-            if resolved == ip:
-                log(f"DNS verified: {domain} -> {ip}")
-                break
-        except Exception:
-            pass
+        resolved = resolve_dns_a(domain)
+        if resolved == ip:
+            log(f"DNS verified: {domain} -> {ip}")
+            break
         warn(f"Waiting for DNS... ({i + 1}/{DNS_VERIFY_RETRIES})")
         time.sleep(DNS_VERIFY_DELAY)
     else:
@@ -1022,6 +1106,8 @@ def sync_nuxt(
 
     log(f"Deploying to {ip}...")
 
+    app_dir = f"/home/{user}/{app_name}"
+
     log(f"Installing Node.js {node_version} and PM2...")
     node_script = dedent(f"""
         set -e
@@ -1033,8 +1119,8 @@ def sync_nuxt(
         if ! command -v pm2 &> /dev/null; then
             npm install -g pm2
         fi
-        mkdir -p /home/{user}/nuxt
-        chown -R {user}:{user} /home/{user}/nuxt
+        mkdir -p {app_dir}
+        chown -R {user}:{user} {app_dir}
     """).strip()
     ssh_script(ip, node_script, user=ssh_user)
 
@@ -1042,11 +1128,11 @@ def sync_nuxt(
     ecosystem_config = generate_pm2_ecosystem_config(
         app_name=app_name,
         script="./.output/server/index.mjs",
-        cwd=f"/home/{user}/nuxt",
+        cwd=app_dir,
         port=port,
     )
-    ssh_write_file(ip, f"/home/{user}/nuxt/ecosystem.config.cjs", ecosystem_config, user=ssh_user)
-    ssh(ip, f"chown {user}:{user} /home/{user}/nuxt/ecosystem.config.cjs", user=ssh_user)
+    ssh_write_file(ip, f"{app_dir}/ecosystem.config.cjs", ecosystem_config, user=ssh_user)
+    ssh(ip, f"chown {user}:{user} {app_dir}/ecosystem.config.cjs", user=ssh_user)
 
     nuxt_exclude = [
         "node_modules",
@@ -1061,7 +1147,7 @@ def sync_nuxt(
     try:
         remote_hash = ssh(
             ip,
-            f"cat /home/{user}/nuxt/.source_hash 2>/dev/null || echo ''",
+            f"cat {app_dir}/.source_hash 2>/dev/null || echo ''",
             user=ssh_user,
         ).strip()
     except Exception:
@@ -1075,7 +1161,7 @@ def sync_nuxt(
                 rm -rf /home/{user}/.pm2 || true
                 rm -f /home/{user}/.pm2/*.sock /home/{user}/.pm2/pm2.pid 2>/dev/null || true
                 sleep 1
-                su - {user} -c "cd /home/{user}/nuxt && pm2 start ecosystem.config.cjs && pm2 save"
+                su - {user} -c "cd {app_dir} && pm2 start ecosystem.config.cjs && pm2 save"
             fi
         """).strip()
         ssh_script(ip, restart_script, user=ssh_user)
@@ -1103,33 +1189,33 @@ def sync_nuxt(
     ]
     if not local_build:
         exclude.append(".output")
-    rsync(source, ip, f"/home/{user}/nuxt", exclude=exclude, user=ssh_user)
+    rsync(source, ip, app_dir, exclude=exclude, user=ssh_user)
 
     if not local_build:
         log("Building on server...")
         build_script = dedent(f"""
             set -e
-            cd /home/{user}/nuxt
+            cd {app_dir}
             export NODE_OPTIONS="--max-old-space-size=1024"
-            su - {user} -c "cd /home/{user}/nuxt && rm -rf package-lock.json .nuxt && npm install && npm run build"
+            su - {user} -c "cd {app_dir} && rm -rf package-lock.json .nuxt && npm install && npm run build"
         """).strip()
         ssh_script(ip, build_script, user=ssh_user)
 
     log("Starting app...")
     start_script = dedent(f"""
         set -e
-        echo "{local_hash}" > /home/{user}/nuxt/.source_hash
+        echo "{local_hash}" > {app_dir}/.source_hash
         # Legacy fallback: fix Nitro import.meta.url resolution for PM2
         # (nginx now serves .output/public directly, so this is rarely needed)
         sed -i 's/dirname(fileURLToPath(import.meta.url))/dirname(fileURLToPath(globalThis._importMeta_.url))/g' \
-            /home/{user}/nuxt/.output/server/chunks/nitro/nitro.mjs 2>/dev/null || true
-        chown -R {user}:{user} /home/{user}/nuxt
+            {app_dir}/.output/server/chunks/nitro/nitro.mjs 2>/dev/null || true
+        chown -R {user}:{user} {app_dir}
         pkill -u {user} -f pm2 || true
         pkill -u {user} -f "node.*index.mjs" || true
         rm -rf /home/{user}/.pm2 || true
         rm -f /home/{user}/.pm2/*.sock /home/{user}/.pm2/pm2.pid 2>/dev/null || true
         sleep 1
-        su - {user} -c "cd /home/{user}/nuxt && pm2 start ecosystem.config.cjs && pm2 save"
+        su - {user} -c "cd {app_dir} && pm2 start ecosystem.config.cjs && pm2 save"
         pm2 startup systemd -u {user} --hp /home/{user} 2>/dev/null || true
     """).strip()
     ssh_script(ip, start_script, user=ssh_user)
@@ -1273,7 +1359,7 @@ def deploy_nuxt(
     if not no_ssl:
         ensure_dns_matches(domain, ip, provider=provider)
 
-    nuxt_static_dir = f"/home/{user}/nuxt/.output/public"
+    nuxt_static_dir = f"/home/{user}/{app_name}/.output/public"
     if no_ssl:
         setup_nginx_ip(name, port=port, static_dir=nuxt_static_dir, ssh_user=ssh_user)
     else:

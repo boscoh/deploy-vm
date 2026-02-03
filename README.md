@@ -10,16 +10,47 @@ uv sync
 
 ## Quick Start
 
-```bash
-# Create a cloud instance
-uv run deploy-vm instance create my-server
+This guide walks you through three main tasks: creating a cloud instance, deploying a FastAPI application, and deploying a Nuxt application.
 
-# Deploy FastAPI app (IP-only)
+### Task 1: Create a Cloud Instance
+
+Create a new cloud instance on DigitalOcean:
+
+```bash
+uv run deploy-vm instance create my-server
+```
+
+Instance details saved to `my-server.instance.json`. You can now SSH to the instance with passwordless SSH:
+
+```bash
+ssh root@<ip>
+ssh deploy@<ip>
+```
+
+### Task 2: Deploy a FastAPI Application
+
+Deploy a FastAPI application with nginx as a reverse proxy in front of it:
+
+```bash
+# IP-only access (no SSL)
 uv run deploy-vm fastapi deploy my-server /path/to/app --no-ssl
 
-# Deploy Nuxt app with SSL
+# With SSL certificate
+uv run deploy-vm fastapi deploy my-server /path/to/app \
+    --domain example.com --email you@example.com
+```
+
+Configures nginx as reverse proxy to FastAPI (port 8000), managed by supervisord. SSL uses certbot (requires DigitalOcean nameservers).
+
+### Task 3: Deploy a Nuxt Application
+
+Deploy a Nuxt application with SSL:
+
+```bash
 uv run deploy-vm nuxt deploy my-server example.com /path/to/nuxt you@example.com
 ```
+
+Builds Nuxt app and configures nginx with SSL. Managed by PM2. Nginx serves static files from `.output/public/` and proxies API requests. SSL uses certbot (requires DigitalOcean nameservers).
 
 ## Commands
 
@@ -27,168 +58,40 @@ uv run deploy-vm nuxt deploy my-server example.com /path/to/nuxt you@example.com
 uv run deploy-vm --help
 ```
 
-| Group      | Command   | Description                                        |
-|------------|-----------|----------------------------------------------------| 
-| `instance` | `create`  | Create a new cloud instance                        |
-| `instance` | `delete`  | Delete an instance                                 |
-| `instance` | `list`    | List all instances                                 |
-| `instance` | `verify`  | Verify server health (SSH, firewall, nginx, DNS)   |
-| `nginx`    | `ip`      | Setup nginx for IP-only access                     |
-| `nginx`    | `ssl`     | Setup nginx with SSL certificate                   |
-| `nuxt`     | `deploy`  | Full deploy: create instance, setup, deploy, nginx |
-| `nuxt`     | `sync`    | Sync Nuxt app to existing server                   |
-| `nuxt`     | `restart` | Restart Nuxt app via PM2                           |
-| `nuxt`     | `status`  | Check PM2 process status                           |
-| `nuxt`     | `logs`    | View PM2 logs                                      |
-| `fastapi`  | `deploy`  | Full deploy: create instance, setup, deploy, nginx |
-| `fastapi`  | `sync`    | Sync FastAPI app to existing server                |
-| `fastapi`  | `restart` | Restart FastAPI app via supervisor                 |
-| `fastapi`  | `status`  | Check supervisor process status                    |
-| `fastapi`  | `logs`    | View supervisor logs                               |
-
-## Instance Management
-
-### Create Instance
-
-```bash
-uv run deploy-vm instance create my-server --region syd1 --vm-size s-1vcpu-1gb
-```
-
-Creates `my-server.instance.json` with instance details.
-
-**Regions:** `syd1`, `sgp1`, `nyc1`, `sfo3`, `lon1`, `fra1`
-**VM Sizes:** `s-1vcpu-512mb`*, `s-1vcpu-1gb`, `s-1vcpu-2gb`, `s-2vcpu-2gb`, `s-4vcpu-8gb`
-**OS Images:** `ubuntu-24-04-x64`, `ubuntu-22-04-x64`
-
-*512mb only available in: nyc1, fra1, sfo3, sgp1, ams3
-
-### Delete Instance
-
-```bash
-uv run deploy-vm instance delete my-server
-uv run deploy-vm instance delete my-server --force  # skip confirmation
-```
-
-### List Instances
-
-```bash
-uv run deploy-vm instance list
-```
-
-### Verify Instance
-
-Check server health (SSH, firewall, nginx, DNS, HTTP/HTTPS):
-
-```bash
-uv run deploy-vm instance verify my-server
-uv run deploy-vm instance verify my-server --domain example.com
-```
-
-## FastAPI Deployment
-
-### Full Deploy
-
-Creates instance, sets up server, deploys app, configures nginx:
-
-```bash
-# With SSL
-uv run deploy-vm fastapi deploy my-server /path/to/app \
-    --domain example.com --email you@example.com
-
-# IP-only (no SSL)
-uv run deploy-vm fastapi deploy my-server /path/to/app --no-ssl
-```
-
-Options:
-- `--app-module` - Uvicorn module (default: `app:app`)
-- `--app-name` - Supervisor process name (default: `fastapi`)
-- `--port` - Backend port (default: 8000)
-- `--workers` - Uvicorn workers (default: 2)
-
-### Sync Only
-
-Sync code to existing server without recreating instance:
-
-```bash
-uv run deploy-vm fastapi sync my-server /path/to/app
-```
-
-Smart rebuild detection: computes source checksum and skips rebuild if unchanged.
-
-### Management
-
-```bash
-uv run deploy-vm fastapi status my-server
-uv run deploy-vm fastapi logs my-server --lines 100
-uv run deploy-vm fastapi restart my-server
-```
-
-The `--app-name` parameter defaults to the instance name (e.g., `my-server` uses app name `my-server`).
-
-## Nuxt Deployment
-
-### Full Deploy
-
-Creates instance, sets up server, deploys app, configures SSL:
-
-```bash
-uv run deploy-vm nuxt deploy my-server example.com /path/to/nuxt you@example.com
-```
-
-Options:
-- `--port` - Backend port (default: 3000)
-- `--local-build` - Build locally, upload .output (default: true)
-- `--node-version` - Node.js version (default: 20)
-
-### Sync Only
-
-```bash
-# Build locally (recommended for low-memory servers)
-uv run deploy-vm nuxt sync my-server /path/to/nuxt
-
-# Build on server
-uv run deploy-vm nuxt sync my-server /path/to/nuxt --local-build=false
-```
-
-### Management
-
-```bash
-uv run deploy-vm nuxt status my-server
-uv run deploy-vm nuxt logs my-server --lines 100
-uv run deploy-vm nuxt restart my-server
-```
-
-The `--app-name` parameter defaults to the instance name (e.g., `my-server` uses PM2 app name `my-server`).
-
-## Nginx Configuration
-
-### IP-Only Access
-
-```bash
-uv run deploy-vm nginx ip my-server --port 8000
-```
-
-### SSL Certificate
-
-```bash
-uv run deploy-vm nginx ssl my-server example.com you@example.com --port 8000
-```
-
-- Configures DigitalOcean DNS (A records for @ and www)
-- Installs nginx reverse proxy
-- Verifies DNS propagation (retries up to 5 minutes)
-- Issues Let's Encrypt SSL certificate
-
-Use `--skip-dns` if managing DNS elsewhere.
-
-### Static Files
-
-For Nuxt deployments, nginx serves static files directly from `.output/public/` for better performance. Use `--nuxt-static-dir` to specify a custom static directory:
-
-```bash
-uv run deploy-vm nginx ssl my-server example.com you@example.com \
-    --nuxt-static-dir /home/deploy/nuxt/.output/public
-```
+- `uv run deploy-vm instance`
+  - `create` - Create a new cloud instance
+    - Regions: syd1, sgp1, nyc1, sfo3, lon1, fra1
+    - VM sizes: s-1vcpu-512mb* (nyc1, fra1, sfo3, sgp1, ams3 only), s-1vcpu-1gb, s-1vcpu-2gb, s-2vcpu-2gb, s-4vcpu-8gb
+    - OS: ubuntu-24-04-x64, ubuntu-22-04-x64
+  - `delete` - Delete an instance (use `--force` to skip confirmation)
+  - `list` - List all instances
+  - `verify` - Verify server health (SSH, firewall, nginx, DNS)
+    - Use `--domain` to check DNS and HTTPS
+- `uv run deploy-vm nginx`
+  - `ip` - Setup nginx for IP-only access
+  - `ssl` - Setup nginx with SSL certificate
+    - Configures DigitalOcean DNS (A records for @ and www), verifies DNS propagation (retries up to 5 minutes), issues Let's Encrypt certificate
+    - Use `--skip-dns` if managing DNS elsewhere
+    - For Nuxt, nginx serves static files from `.output/public/` by default (use `--nuxt-static-dir` to customize)
+- `uv run deploy-vm nuxt`
+  - `deploy` - Full deploy: create instance, setup, deploy, nginx
+    - Options: `--port` (default: 3000), `--local-build` (default: true), `--node-version` (default: 20)
+    - App name defaults to instance name
+  - `sync` - Sync Nuxt app to existing server
+    - Smart rebuild detection: computes source checksum and skips rebuild if unchanged
+    - Use `--local-build=false` to build on server
+  - `restart` - Restart Nuxt app via PM2
+  - `status` - Check PM2 process status
+  - `logs` - View PM2 logs
+- `uv run deploy-vm fastapi`
+  - `deploy` - Full deploy: create instance, setup, deploy, nginx
+    - Options: `--app-module` (default: app:app), `--app-name` (default: fastapi), `--port` (default: 8000), `--workers` (default: 2)
+    - App name defaults to instance name
+  - `sync` - Sync FastAPI app to existing server
+    - Smart rebuild detection: computes source checksum and skips rebuild if unchanged
+  - `restart` - Restart FastAPI app via supervisor
+  - `status` - Check supervisor process status
+  - `logs` - View supervisor logs
 
 ## Requirements
 
@@ -196,12 +99,10 @@ uv run deploy-vm nginx ssl my-server example.com you@example.com \
 
 | Tool   | Purpose                  | Install                                             |
 |--------|--------------------------|-----------------------------------------------------|
-| Python | Runtime (3.11+)          | `brew install python`                               |
 | uv     | Python package manager   | `curl -LsSf https://astral.sh/uv/install.sh \| sh`  |
 | doctl  | DigitalOcean CLI         | `brew install doctl`                                |
 | rsync  | File sync to server      | `brew install rsync`                                |
 | ssh    | Remote command execution | Pre-installed on macOS/Linux                        |
-| dig    | DNS verification         | Pre-installed (or `brew install bind`)              |
 | npm    | Nuxt local builds        | `brew install node`                                 |
 
 ### Setup
@@ -232,6 +133,7 @@ Instance details are stored in `<name>.instance.json`:
   "ip": "170.64.235.136",
   "provider": "digitalocean",
   "region": "syd1",
+  "os_image": "ubuntu-24-04-x64",
   "vm_size": "s-1vcpu-1gb",
   "user": "deploy"
 }

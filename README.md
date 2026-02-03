@@ -65,6 +65,7 @@ uv run deploy-vm --help
     - OS: ubuntu-24-04-x64, ubuntu-22-04-x64
   - `delete` - Delete an instance (use `--force` to skip confirmation)
   - `list` - List all instances
+  - `apps` - List all apps deployed on an instance
   - `verify` - Verify server health (SSH, firewall, nginx, DNS)
     - Use `--domain` to check DNS and HTTPS
 - `uv run deploy-vm nginx`
@@ -80,30 +81,32 @@ uv run deploy-vm --help
   - `sync` - Sync Nuxt app to existing server
     - Smart rebuild detection: computes source checksum and skips rebuild if unchanged
     - Use `--local-build=false` to build on server
-  - `restart` - Restart Nuxt app via PM2
+  - `restart` - Restart Nuxt app via PM2 (use `--app-name` if multiple apps exist)
   - `status` - Check PM2 process status
-  - `logs` - View PM2 logs
+  - `logs` - View PM2 logs (use `--app-name` if multiple apps exist)
 - `uv run deploy-vm fastapi`
   - `deploy` - Full deploy: create instance, setup, deploy, nginx
     - Options: `--app-module` (default: app:app), `--app-name` (default: fastapi), `--port` (default: 8000), `--workers` (default: 2)
     - App name defaults to instance name
   - `sync` - Sync FastAPI app to existing server
     - Smart rebuild detection: computes source checksum and skips rebuild if unchanged
-  - `restart` - Restart FastAPI app via supervisor
+  - `restart` - Restart FastAPI app via supervisor (use `--app-name` if multiple apps exist)
   - `status` - Check supervisor process status
-  - `logs` - View supervisor logs
+  - `logs` - View supervisor logs (use `--app-name` if multiple apps exist)
 
 ## Requirements
 
 ### Local Tools
 
-| Tool   | Purpose                  | Install                                             |
-|--------|--------------------------|-----------------------------------------------------|
-| uv     | Python package manager   | `curl -LsSf https://astral.sh/uv/install.sh \| sh`  |
-| doctl  | DigitalOcean CLI         | `brew install doctl`                                |
-| rsync  | File sync to server      | `brew install rsync`                                |
-| ssh    | Remote command execution | Pre-installed on macOS/Linux                        |
-| npm    | Nuxt local builds        | `brew install node`                                 |
+| Tool  | Purpose                        | Install                                             |
+|-------|--------------------------------|-----------------------------------------------------|
+| uv    | Python package manager         | `curl -LsSf https://astral.sh/uv/install.sh \| sh`  |
+| doctl | DigitalOcean CLI               | `brew install doctl`                                |
+| rsync | File sync to server            | `brew install rsync`                                |
+| tar   | Archive creation (fallback)    | Pre-installed on macOS/Linux                        |
+| scp   | Secure file copy (fallback)    | Pre-installed on macOS/Linux                        |
+| ssh   | Remote command execution       | Pre-installed on macOS/Linux                        |
+| npm   | Nuxt local builds              | `brew install node`                                 |
 
 ### Setup
 
@@ -135,7 +138,21 @@ Instance details are stored in `<name>.instance.json`:
   "region": "syd1",
   "os_image": "ubuntu-24-04-x64",
   "vm_size": "s-1vcpu-1gb",
-  "user": "deploy"
+  "user": "deploy",
+  "apps": [
+    {"name": "myapp", "type": "nuxt", "port": 3000},
+    {"name": "api", "type": "fastapi", "port": 8000}
+  ]
 }
 ```
+
+The `apps` array tracks all apps deployed on the instance. Each app entry includes:
+- `name`: App name (PM2 process name or supervisor program name)
+- `type`: App type (`nuxt` or `fastapi`)
+- `port`: Port number (optional, saved during deployment)
+
+**Multiple Apps Support**: You can deploy multiple apps to the same instance. Management commands (restart, logs) will:
+- Automatically use the app if only one exists
+- Require `--app-name` if multiple apps exist
+- Use `uv run deploy-vm instance apps <name>` to list all apps on an instance
 

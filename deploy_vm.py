@@ -205,7 +205,94 @@ def load_instance(name: str) -> dict:
     path = Path(f"{name}.instance.json")
     if not path.exists():
         error(f"Instance file not found: {path}")
-    return json.loads(path.read_text())
+    data = json.loads(path.read_text())
+    # Migrate old format (app_name/app_type) to new format (apps array)
+    if "apps" not in data and "app_name" in data:
+        app_data = {"name": data["app_name"], "type": data.get("app_type", "nuxt")}
+        # Preserve port if it was stored elsewhere (unlikely but possible)
+        if "port" in data:
+            app_data["port"] = data["port"]
+        data["apps"] = [app_data]
+        # Clean up old fields after migration
+        data.pop("app_name", None)
+        data.pop("app_type", None)
+        # Save migrated format
+        save_instance(name, data)
+    return data
+
+
+def get_instance_apps(instance: dict) -> list[dict]:
+    """Get list of apps from instance data, with backward compatibility."""
+    if "apps" in instance:
+        return instance["apps"]
+    if "app_name" in instance:
+        return [{"name": instance["app_name"], "type": instance.get("app_type", "nuxt")}]
+    return []
+
+
+def add_app_to_instance(instance: dict, app_name: str, app_type: str, port: int | None = None):
+    """Add or update an app in the instance apps list with smart conflict detection.
+    
+    :param instance: Instance data dict
+    :param app_name: App name
+    :param app_type: App type (nuxt or fastapi)
+    :param port: Port number (optional)
+    """
+    if "apps" not in instance:
+        instance["apps"] = []
+    
+    # Check if app already exists
+    existing_app = None
+    for app in instance["apps"]:
+        if app["name"] == app_name:
+            existing_app = app
+            break
+    
+    if existing_app:
+        # App exists - update it
+        old_type = existing_app.get("type", "unknown")
+        old_port = existing_app.get("port")
+        
+        # Warn if type is changing
+        if old_type != app_type:
+            warn(f"App '{app_name}' type changing from {old_type} to {app_type}")
+        
+        # Check for port conflicts with other apps
+        if port is not None and port != old_port:
+            conflicting_apps = [
+                app for app in instance["apps"]
+                if app["name"] != app_name and app.get("port") == port
+            ]
+            if conflicting_apps:
+                conflict_names = ", ".join(app["name"] for app in conflicting_apps)
+                warn(f"Port {port} already in use by: {conflict_names}")
+        
+        # Update app data, preserving any additional metadata
+        existing_app["type"] = app_type
+        if port is not None:
+            existing_app["port"] = port
+        elif "port" in existing_app and old_port is not None:
+            # Keep existing port if new port not provided
+            pass
+        
+        log(f"Updated app '{app_name}' ({old_type} -> {app_type})")
+    else:
+        # New app - check for port conflicts
+        if port is not None:
+            conflicting_apps = [
+                app for app in instance["apps"]
+                if app.get("port") == port
+            ]
+            if conflicting_apps:
+                conflict_names = ", ".join(app["name"] for app in conflicting_apps)
+                warn(f"Port {port} already in use by: {conflict_names}")
+        
+        # Add new app
+        app_data = {"name": app_name, "type": app_type}
+        if port is not None:
+            app_data["port"] = port
+        instance["apps"].append(app_data)
+        log(f"Added app '{app_name}' ({app_type})")
 
 
 def is_valid_ip(ip: str) -> bool:
@@ -1094,6 +1181,11 @@ def sync_nuxt(
     instance = resolve_instance(target)
     ip = instance["ip"]
     user = user or instance.get("user", "deploy")
+    
+    if not is_valid_ip(target):
+        add_app_to_instance(instance, app_name, "nuxt", port)
+        save_instance(target, instance)
+    
     source = str(Path(source).resolve())
 
     if not Path(source).exists():
@@ -1229,13 +1321,23 @@ def restart_pm2(target: str, *, user: str | None = None, ssh_user: str = "root",
     :param target: Server IP address or instance name (loads from <name>.instance.json)
     :param user: App user (reads from instance.json if not specified)
     :param ssh_user: SSH user for connection
-    :param app_name: PM2 app name (defaults to target name or 'nuxt')
+    :param app_name: PM2 app name (required if multiple apps exist on instance)
     """
     instance = resolve_instance(target)
     ip = instance["ip"]
     user = user or instance.get("user", "deploy")
+    
+    apps = [app for app in get_instance_apps(instance) if app["type"] == "nuxt"]
+    
     if app_name is None:
-        app_name = target if not target.replace(".", "").isdigit() else "nuxt"
+        if len(apps) == 1:
+            app_name = apps[0]["name"]
+        elif len(apps) > 1:
+            app_names = ", ".join(app["name"] for app in apps)
+            error(f"Multiple Nuxt apps found: {app_names}. Use --app-name to specify.")
+        else:
+            app_name = target if not target.replace(".", "").isdigit() else "nuxt"
+    
     log(f"Restarting {app_name}...")
     ssh_as_user(ip, user, f"pm2 reload {app_name}", ssh_user=ssh_user)
     log("App restarted")
@@ -1255,6 +1357,25 @@ def show_pm2_status(target: str, *, user: str | None = None, ssh_user: str = "ro
     print(ssh_as_user(ip, user, "pm2 list", ssh_user=ssh_user))
 
 
+@instance_app.command(name="apps")
+def list_instance_apps(target: str):
+    """List all apps deployed on an instance.
+
+    :param target: Instance name (loads from <name>.instance.json)
+    """
+    instance = resolve_instance(target)
+    apps = get_instance_apps(instance)
+    
+    if not apps:
+        print(f"No apps tracked for instance '{target}'")
+        return
+    
+    print(f"Apps on {target} ({instance['ip']}):")
+    for app in apps:
+        port_info = f" (port {app.get('port', '?')})" if app.get('port') else ""
+        print(f"  - {app['name']}: {app['type']}{port_info}")
+
+
 @nuxt_app.command(name="logs")
 def show_pm2_logs(
     target: str, *, user: str | None = None, ssh_user: str = "root", lines: int = 50, app_name: str | None = None
@@ -1265,13 +1386,22 @@ def show_pm2_logs(
     :param user: App user (reads from instance.json if not specified)
     :param ssh_user: SSH user for connection
     :param lines: Number of lines to show
-    :param app_name: PM2 app name (defaults to target name or 'nuxt')
+    :param app_name: PM2 app name (required if multiple apps exist on instance)
     """
     instance = resolve_instance(target)
     ip = instance["ip"]
     user = user or instance.get("user", "deploy")
+    
+    apps = [app for app in get_instance_apps(instance) if app["type"] == "nuxt"]
+    
     if app_name is None:
-        app_name = target if not target.replace(".", "").isdigit() else "nuxt"
+        if len(apps) == 1:
+            app_name = apps[0]["name"]
+        elif len(apps) > 1:
+            app_names = ", ".join(app["name"] for app in apps)
+            error(f"Multiple Nuxt apps found: {app_names}. Use --app-name to specify.")
+        else:
+            app_name = target if not target.replace(".", "").isdigit() else "nuxt"
     print(
         ssh_as_user(
             ip, user, f"pm2 logs {app_name} --lines {lines} --nostream", ssh_user=ssh_user
@@ -1338,7 +1468,9 @@ def deploy_nuxt(
 
     if "user" not in data or data["user"] != user:
         data["user"] = user
-        save_instance(name, data)
+    
+    add_app_to_instance(data, app_name, "nuxt", port)
+    save_instance(name, data)
 
     ip = data["ip"]
 
@@ -1416,6 +1548,11 @@ def sync_fastapi(
     instance = resolve_instance(target)
     ip = instance["ip"]
     user = user or instance.get("user", "deploy")
+    
+    if not is_valid_ip(target):
+        add_app_to_instance(instance, app_name, "fastapi", port)
+        save_instance(target, instance)
+    
     source = str(Path(source).resolve())
 
     if not Path(source).exists():
@@ -1510,12 +1647,22 @@ def restart_supervisor(
     """Restart a FastAPI app via supervisord.
 
     :param target: Server IP address or instance name (loads from <name>.instance.json)
-    :param app_name: Name of the supervisor process (defaults to target name)
+    :param app_name: Name of the supervisor process (required if multiple apps exist on instance)
     :param ssh_user: SSH user for connection
     """
-    ip = resolve_ip(target)
+    instance = resolve_instance(target)
+    ip = instance["ip"]
+    
+    apps = [app for app in get_instance_apps(instance) if app["type"] == "fastapi"]
+    
     if app_name is None:
-        app_name = target if not target.replace(".", "").isdigit() else "fastapi"
+        if len(apps) == 1:
+            app_name = apps[0]["name"]
+        elif len(apps) > 1:
+            app_names = ", ".join(app["name"] for app in apps)
+            error(f"Multiple FastAPI apps found: {app_names}. Use --app-name to specify.")
+        else:
+            app_name = target if not target.replace(".", "").isdigit() else "fastapi"
 
     log(f"Restarting {app_name}...")
     ssh(ip, f"supervisorctl restart {app_name}", user=ssh_user)
@@ -1540,13 +1687,23 @@ def show_supervisor_logs(
     """View supervisord logs.
 
     :param target: Server IP address or instance name (loads from <name>.instance.json)
-    :param app_name: Name of the supervisor process (defaults to target name)
+    :param app_name: Name of the supervisor process (required if multiple apps exist on instance)
     :param ssh_user: SSH user for connection
     :param lines: Number of lines to show
     """
-    ip = resolve_ip(target)
+    instance = resolve_instance(target)
+    ip = instance["ip"]
+    
+    apps = [app for app in get_instance_apps(instance) if app["type"] == "fastapi"]
+    
     if app_name is None:
-        app_name = target if not target.replace(".", "").isdigit() else "fastapi"
+        if len(apps) == 1:
+            app_name = apps[0]["name"]
+        elif len(apps) > 1:
+            app_names = ", ".join(app["name"] for app in apps)
+            error(f"Multiple FastAPI apps found: {app_names}. Use --app-name to specify.")
+        else:
+            app_name = target if not target.replace(".", "").isdigit() else "fastapi"
     log(f"Last {lines} lines of {app_name} logs:")
     print(
         ssh(
@@ -1618,7 +1775,9 @@ def deploy_fastapi(
 
     if "user" not in data or data["user"] != user:
         data["user"] = user
-        save_instance(name, data)
+    
+    add_app_to_instance(data, app_name, "fastapi", port)
+    save_instance(name, data)
 
     ip = data["ip"]
 

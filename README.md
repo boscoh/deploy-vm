@@ -104,9 +104,11 @@ uv run deploy-vm --help
 | doctl | DigitalOcean CLI               | `brew install doctl`                                |
 | rsync | File sync to server            | `brew install rsync`                                |
 | tar   | Archive creation (fallback)    | Pre-installed on macOS/Linux                        |
-| scp   | Secure file copy (fallback)    | Pre-installed on macOS/Linux                        |
-| ssh   | Remote command execution       | Pre-installed on macOS/Linux                        |
+| scp   | Secure file copy (fallback)    | Pre-installed on macOS/Linux (part of OpenSSH)      |
+| ssh   | Remote command execution       | Pre-installed on macOS/Linux (required for rsync/scp) |
 | npm   | Nuxt local builds              | `brew install node`                                 |
+
+Note: While Fabric (Python library) uses Paramiko for SSH connections, `rsync` and `scp` commands require the SSH client binary to be installed.
 
 ### Setup
 

@@ -8,6 +8,8 @@ A minimalist Python CLI for deploying web apps to the cloud (DigitalOcean for no
 uv tool install deploy-vm
 ```
 
+See [Requirements](#requirements) for prerequisites.
+
 ## Quick Start
 
 This guide walks you through three main tasks: creating a cloud instance, deploying a FastAPI application, and deploying a Nuxt application.

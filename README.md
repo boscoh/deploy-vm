@@ -190,15 +190,37 @@ ns3.digitalocean.com
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-**Install provider CLIs:**
-```bash
-# AWS
-brew install awscli
-aws configure
+**Install and configure provider CLIs:**
 
-# DigitalOcean
+**AWS:**
+```bash
+# Install
+brew install awscli
+
+# Configure credentials (creates ~/.aws/credentials)
+aws configure
+# Prompts for: Access Key ID, Secret Access Key, Region, Output format
+```
+
+**DigitalOcean:**
+```bash
+# Install
 brew install doctl
+
+# Authenticate with your DigitalOcean account
 doctl auth init
+# Opens browser to generate API token, then paste token when prompted
+```
+
+**Using .env file (optional):**
+```bash
+# AWS - Use specific profile and region
+echo "DEPLOY_VM_PROVIDER=aws" >> .env
+echo "AWS_PROFILE=default" >> .env
+echo "AWS_REGION=ap-southeast-2" >> .env
+
+# DigitalOcean - Set as default provider
+echo "DEPLOY_VM_PROVIDER=digitalocean" >> .env
 ```
 
 ### SSH Key

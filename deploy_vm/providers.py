@@ -328,7 +328,22 @@ class AWSProvider:
             self.aws_config["region_name"] = region
 
         region = region or self.aws_config.get("region_name", "ap-southeast-2")
-        self.region = self._validate_and_normalize_region(region)
+
+        # Validate and normalize region (converts AZ like us-east-1a to region us-east-1)
+        if region and region[-1].isalpha() and region[:-1] in self.REGIONS:
+            normalized_region = region[:-1]
+            log(
+                f"Converted availability zone '{region}' to region '{normalized_region}'"
+            )
+            self.region = normalized_region
+        elif region not in self.REGIONS:
+            error(
+                f"Invalid AWS region: '{region}'\n"
+                f"Valid AWS regions: {', '.join(self.REGIONS[:6])}, ...\n"
+                f"See PROVIDER_COMPARISON.md for full list."
+            )
+        else:
+            self.region = region
 
         if not self.aws_config:
             error(
@@ -471,30 +486,6 @@ class AWSProvider:
             sts.get_caller_identity()
         except Exception as e:
             error(f"AWS authentication failed: {e}")
-
-    def _validate_and_normalize_region(self, region: str) -> str:
-        """Validate and normalize AWS region.
-
-        Converts availability zone (e.g., us-east-1a) to region (us-east-1).
-
-        :param region: AWS region or availability zone
-        :return: Normalized region name
-        """
-        if region and region[-1].isalpha() and region[:-1] in self.REGIONS:
-            normalized_region = region[:-1]
-            log(
-                f"Converted availability zone '{region}' to region '{normalized_region}'"
-            )
-            return normalized_region
-
-        if region not in self.REGIONS:
-            error(
-                f"Invalid AWS region: '{region}'\n"
-                f"Valid AWS regions: {', '.join(self.REGIONS[:6])}, ...\n"
-                f"See PROVIDER_COMPARISON.md for full list."
-            )
-
-        return region
 
     def _get_ec2_client(self):
         return self._get_session().client("ec2")

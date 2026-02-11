@@ -2,348 +2,238 @@
 
 Python CLI for deploying web applications to cloud providers (DigitalOcean and AWS).
 
-**Important**: DigitalOcean and AWS use different parameter formats. See [PROVIDER_COMPARISON.md](PROVIDER_COMPARISON.md) for detailed differences in regions, VM sizes, and OS images.
-
 ## Installation
 
 ```bash
 uv tool install deploy-vm
 ```
 
-See [Requirements](#requirements) for prerequisites.
-
-## Configuration
-
-### Environment Variables (.env)
-
-Create a `.env` file in your project root to set default configuration:
-
-```bash
-# Cloud Provider (optional)
-DEPLOY_VM_PROVIDER=aws              # or "digitalocean" (default)
-
-# AWS Configuration (optional)
-AWS_PROFILE=your-profile            # AWS CLI profile name
-AWS_REGION=ap-southeast-2           # Default AWS region
-```
-
-**Benefits:**
-- Set provider once, no need for `--provider aws` on every command
-- Use AWS CLI profiles for multiple accounts
-- Override defaults with command-line flags when needed
-
-**Note:** The `.env` file is loaded automatically. Command-line arguments always take precedence over environment variables.
-
 ## Quick Start
 
-This guide walks you through three main tasks: creating a cloud instance, deploying a FastAPI application, and deploying a Nuxt application.
+### 1. Configure Provider (Optional)
 
-### Task 1: Create a Cloud Instance
-
-Create a new cloud instance on DigitalOcean or AWS:
+Create `.env` in your project root:
 
 ```bash
-# DigitalOcean (default)
-uv run deploy-vm instance create my-server
+# AWS (recommended for production)
+DEPLOY_VM_PROVIDER=aws
+AWS_PROFILE=default
+AWS_REGION=ap-southeast-2
 
-# AWS
-uv run deploy-vm instance create my-server --provider aws
+# Or use DigitalOcean
+DEPLOY_VM_PROVIDER=digitalocean
 ```
 
-Instance details saved to `my-server.instance.json`. You can now SSH to the instance with passwordless SSH:
+**Setup requirements:**
+- **AWS**: Run `aws configure` to set credentials ([AWS setup guide](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-quickstart.html))
+- **DigitalOcean**: Run `doctl auth init` to authenticate
 
+### 2. Deploy Your App
+
+**With domain + SSL (recommended):**
 ```bash
-ssh root@<ip>
-ssh deploy@<ip>
-```
-
-### Task 2: Deploy a FastAPI Application
-
-Deploy a FastAPI application with nginx as a reverse proxy in front of it:
-
-```bash
-# DigitalOcean - IP-only access (no SSL)
-uv run deploy-vm fastapi deploy my-server /path/to/app --no-ssl
-
-# DigitalOcean - With SSL certificate
-uv run deploy-vm fastapi deploy my-server /path/to/app \
-    --domain example.com --email you@example.com
-
-# AWS - With SSL certificate
-uv run deploy-vm fastapi deploy my-server /path/to/app \
-    --provider aws --vm-size t3.small \
-    --domain example.com --email you@example.com
-```
-
-Configures nginx as reverse proxy to FastAPI (port 8000), managed by supervisord. SSL uses certbot (requires Route53 for AWS or DigitalOcean DNS).
-
-### Task 3: Deploy a Nuxt Application
-
-Deploy a Nuxt application with SSL:
-
-```bash
-# DigitalOcean
-uv run deploy-vm nuxt deploy my-server example.com /path/to/nuxt you@example.com
-
-# AWS
-uv run deploy-vm nuxt deploy my-server /path/to/nuxt \
-    --provider aws --region us-west-2 --vm-size t3.medium \
-    --domain example.com --email you@example.com
-```
-
-Builds Nuxt app and configures nginx with SSL. Managed by PM2. Nginx serves static files from `.output/public/` and proxies API requests. SSL uses certbot (requires Route53 for AWS or DigitalOcean DNS).
-
-## Adding SSL After Deployment
-
-You can deploy without SSL first and add it later when ready:
-
-### Step 1: Deploy without SSL
-
-```bash
-# FastAPI example
-uv run deploy-vm fastapi deploy my-server /path/to/app \
-    --provider aws \
-    --no-ssl
-
-# Nuxt example
-uv run deploy-vm nuxt deploy my-server /path/to/nuxt \
-    --no-ssl
-```
-
-Your app is now accessible via `http://<ip-address>`
-
-### Step 2: Get nameservers and configure domain
-
-```bash
-# Get nameservers for your domain (creates hosted zone if needed)
+# Get nameservers and configure at registrar first
 uv run deploy-vm dns nameservers example.com --provider-name aws
 
-# Configure these nameservers at your domain registrar
-# Wait 24-48 hours for DNS propagation
+# Deploy with SSL (creates instance, deploys app, configures SSL)
+uv run deploy-vm fastapi deploy my-server /path/to/app \
+    --domain example.com --email you@example.com
 ```
 
-### Step 3: Add SSL certificate
+**Without SSL (test/staging):**
+```bash
+# Deploy to IP only
+uv run deploy-vm fastapi deploy my-server /path/to/app --no-ssl
+
+# Add SSL later when domain is ready
+uv run deploy-vm nginx ssl my-server example.com you@example.com --port 8000
+```
+
+**Supported apps:**
+- `fastapi deploy` - FastAPI apps with uvicorn + supervisord
+- `nuxt deploy` - Nuxt apps with PM2
+
+### 3. Manage Your Deployment
 
 ```bash
-# Add SSL to existing deployment
-uv run deploy-vm nginx ssl my-server example.com admin@example.com \
-    --port 8000 \
-    --provider-name aws
+# Check status
+uv run deploy-vm instance verify my-server --domain example.com
+
+# View logs
+uv run deploy-vm fastapi logs my-server
+
+# Restart app
+uv run deploy-vm fastapi restart my-server
+
+# Redeploy code
+uv run deploy-vm fastapi sync my-server /path/to/app
 ```
 
-Your app is now accessible via `https://example.com`
+## Common Workflows
 
-### When to use this approach:
+### Add SSL After Deployment
 
-- **DNS not ready**: Nameservers haven't propagated yet
-- **Testing first**: Want to verify app works before adding SSL
-- **Iterative setup**: Prefer step-by-step infrastructure configuration
-- **Domain issues**: Still configuring domain settings
+Deploy without SSL first, add it when ready:
 
-## Commands
+```bash
+# 1. Deploy
+uv run deploy-vm fastapi deploy my-server /path/to/app --no-ssl
 
+# 2. Get nameservers (creates hosted zone automatically)
+uv run deploy-vm dns nameservers example.com --provider-name aws
+
+# 3. Configure nameservers at registrar, wait 24-48h
+
+# 4. Add SSL
+uv run deploy-vm nginx ssl my-server example.com you@example.com --port 8000
 ```
-deploy-vm --help
+
+### Multiple Apps on One Instance
+
+```bash
+# Deploy first app
+uv run deploy-vm fastapi deploy my-server /path/to/api \
+    --app-name api --port 8000 --domain api.example.com --email you@example.com
+
+# Deploy second app
+uv run deploy-vm nuxt deploy my-server /path/to/frontend \
+    --app-name frontend --port 3000 --domain example.com --email you@example.com
+
+# List all apps
+uv run deploy-vm instance apps my-server
+
+# Manage specific app
+uv run deploy-vm fastapi restart my-server --app-name api
 ```
 
-- `deploy-vm instance`
-  - `create` - Create a new cloud instance
-    - `--provider digitalocean` (default)
-      - `--region`: syd1 (default), sgp1, nyc1, sfo3, lon1, fra1
-      - `--vm-size`: s-1vcpu-1gb (default), s-1vcpu-512mb* (nyc1, fra1, sfo3, sgp1, ams3 only), s-1vcpu-2gb, s-2vcpu-2gb, s-4vcpu-8gb
-      - `--os-image`: ubuntu-24-04-x64 (default), ubuntu-22-04-x64
-    - `--provider aws`
-      - `--region`: ap-southeast-2 (default), us-east-1, us-west-2, eu-west-1, ap-southeast-1
-      - `--vm-size`: t3.micro (default), t3.small, t3.medium, t3.large, t3.xlarge, t4g.micro, t4g.small
-      - `--os-image`: Latest Ubuntu 22.04 LTS AMI (auto-selected)
-  - `delete` - Delete an instance (use `--force` to skip confirmation)
-  - `list` - List all instances
-  - `apps` - List all apps deployed on an instance
-  - `verify` - Verify server health (SSH, firewall, nginx, DNS)
-    - Use `--domain` to check DNS and HTTPS
-- `deploy-vm dns`
-  - `nameservers` - Get nameservers for a domain (creates hosted zone if needed for AWS)
-    - AWS: Shows Route53 nameservers and zone details
-    - DigitalOcean: Shows standard DigitalOcean nameservers
-    - Caches result in `<domain>.nameservers.json` for faster subsequent lookups
-- `deploy-vm nginx`
-  - `ip` - Setup nginx for IP-only access
-  - `ssl` - Setup nginx with SSL certificate
-    - Configures DigitalOcean DNS (A records for @ and www), verifies DNS propagation (retries up to 5 minutes), issues Let's Encrypt certificate
-    - Use `--skip-dns` if managing DNS elsewhere
-    - For Nuxt, nginx serves static files from `.output/public/` by default (use `--nuxt-static-dir` to customize)
-- `deploy-vm nuxt`
-  - `deploy` - Full deploy: create instance, setup, deploy, nginx
-    - Options: `--port` (default: 3000), `--local-build` (default: true), `--node-version` (default: 20)
-    - App name defaults to instance name
-  - `sync` - Sync Nuxt app to existing server
-    - Smart rebuild detection: computes source checksum and skips rebuild if unchanged
-    - Use `--local-build=false` to build on server
-  - `restart` - Restart Nuxt app via PM2 (use `--app-name` if multiple apps exist)
-  - `status` - Check PM2 process status
-  - `logs` - View PM2 logs (use `--app-name` if multiple apps exist)
-- `deploy-vm fastapi`
-  - `deploy` - Full deploy: create instance, setup, deploy, nginx
-    - Options: `--app-module` (default: app:app), `--app-name` (default: fastapi), `--port` (default: 8000), `--workers` (default: 2)
-    - App name defaults to instance name
-  - `sync` - Sync FastAPI app to existing server
-    - Smart rebuild detection: computes source checksum and skips rebuild if unchanged
-  - `restart` - Restart FastAPI app via supervisor (use `--app-name` if multiple apps exist)
-  - `status` - Check supervisor process status
-  - `logs` - View supervisor logs (use `--app-name` if multiple apps exist)
+## Configuration Reference
 
-## Requirements
+### Environment Variables
 
-### Local Tools
+| Variable               | Description                              | Default          |
+|------------------------|------------------------------------------|------------------|
+| `DEPLOY_VM_PROVIDER`   | Cloud provider (`aws` or `digitalocean`) | `digitalocean`   |
+| `AWS_PROFILE`          | AWS CLI profile name                     | None             |
+| `AWS_REGION`           | Default AWS region                       | `ap-southeast-2` |
 
-| Tool  | Purpose                        | Install                                             |
-|-------|--------------------------------|-----------------------------------------------------|
-| uv    | Python package manager         | `curl -LsSf https://astral.sh/uv/install.sh \| sh`  |
-| doctl | DigitalOcean CLI (optional)    | `brew install doctl`                                |
-| aws   | AWS CLI (optional)             | `brew install awscli`                               |
-| rsync | File sync to server            | `brew install rsync`                                |
-| tar   | Archive creation (fallback)    | Pre-installed on macOS/Linux                        |
-| scp   | Secure file copy (fallback)    | Pre-installed on macOS/Linux (part of OpenSSH)      |
-| ssh   | Remote command execution       | Pre-installed on macOS/Linux (required for rsync/scp) |
-| npm   | Nuxt local builds              | `brew install node`                                 |
+**Priority:** Command-line flags > `.env` file > Built-in defaults
 
-Note: While Fabric (Python library) uses Paramiko for SSH connections, `rsync` and `scp` commands require the SSH client binary to be installed.
+### Provider-Specific Settings
 
-### Setup
+| Setting    | AWS                                          | DigitalOcean                                    |
+|------------|----------------------------------------------|-------------------------------------------------|
+| **Regions** | `us-east-1`, `us-west-2`, `ap-southeast-2`  | `syd1`, `sgp1`, `nyc1`, `sfo3`, `lon1`         |
+| **VM Sizes** | `t3.micro`, `t3.small`, `t3.medium`         | `s-1vcpu-1gb`, `s-2vcpu-2gb`, `s-4vcpu-8gb`   |
+| **DNS**     | Requires Route53 hosted zone                | Requires DigitalOcean nameservers              |
+| **Auth**    | `aws configure` or `.env` file              | `doctl auth init`                              |
 
-#### DigitalOcean
+See [PROVIDER_COMPARISON.md](PROVIDER_COMPARISON.md) for complete details.
 
-1. Authenticate doctl: `doctl auth init`
-2. SSH key in `~/.ssh/` (id_ed25519, id_rsa, or id_ecdsa)
-3. SSH key uploaded to DigitalOcean (auto-uploaded on first deploy)
+## Commands Reference
 
-#### AWS
+```bash
+deploy-vm --help  # See all commands
 
-1. **Configure AWS credentials** (choose one method):
+# Core commands
+deploy-vm instance create|delete|list|verify|apps
+deploy-vm dns nameservers
+deploy-vm nginx ip|ssl
+deploy-vm fastapi deploy|sync|restart|status|logs
+deploy-vm nuxt deploy|sync|restart|status|logs
+```
 
-   **Option A: AWS CLI**
-   ```bash
-   aws configure
-   # Prompts for: Access Key ID, Secret Access Key, Region, Output format
-   ```
+**Key options:**
+- `--provider aws|digitalocean` - Cloud provider
+- `--region <region>` - Provider region
+- `--vm-size <size>` - Instance size
+- `--domain <domain>` - Domain for SSL
+- `--no-ssl` - Skip SSL configuration
+- `--app-name <name>` - App identifier (for multiple apps)
 
-   **Option B: Environment variables**
-   ```bash
-   # For temporary use (session only)
-   export AWS_PROFILE=your-profile
-   export AWS_REGION=ap-southeast-2
+See full command documentation: `deploy-vm <command> --help`
 
-   # For persistent use, add to .env file:
-   echo "AWS_PROFILE=your-profile" >> .env
-   echo "AWS_REGION=ap-southeast-2" >> .env
-   ```
+## Domain Setup
 
-   **Option C: Multiple profiles**
-   ```bash
-   # Edit ~/.aws/credentials
-   [default]
-   aws_access_key_id = YOUR_KEY
-   aws_secret_access_key = YOUR_SECRET
+### AWS Route53
 
-   [work]
-   aws_access_key_id = WORK_KEY
-   aws_secret_access_key = WORK_SECRET
+```bash
+# Tool creates hosted zone automatically
+uv run deploy-vm dns nameservers example.com --provider-name aws
 
-   # Use in .env
-   echo "AWS_PROFILE=work" >> .env
-   ```
+# Configure nameservers at registrar (shown in output)
+# Wait 24-48 hours for propagation
+```
 
-2. **Set default provider** (optional but recommended):
-   ```bash
-   # Add to .env file in project root
-   echo "DEPLOY_VM_PROVIDER=aws" >> .env
-   ```
-   This allows you to omit `--provider aws` from all commands.
+### DigitalOcean DNS
 
-3. **SSH key setup**:
-   - SSH key in `~/.ssh/` (id_ed25519, id_rsa, or id_ecdsa)
-   - Automatically uploaded to AWS on first deploy
-
-4. **Credentials file**: `~/.aws/credentials` stores your access keys
-
-### Domain Setup
-
-#### DigitalOcean
-
-Configure your domain registrar to use DigitalOcean's nameservers:
-
+Configure these nameservers at your domain registrar:
 ```
 ns1.digitalocean.com
 ns2.digitalocean.com
 ns3.digitalocean.com
 ```
 
-Nameserver changes can take up to 48 hours to propagate.
+## Requirements
 
-#### AWS
+### Local Tools
 
-Configure Route53 hosted zone for your domain:
+| Tool                           | Purpose                    | Required | Install                     |
+|--------------------------------|----------------------------|----------|-----------------------------|
+| `uv`                           | Python package manager     | ✅ Yes   | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+| `ssh`, `rsync`, `tar`, `scp`   | File transfer & remote ops | ✅ Yes   | Pre-installed (macOS/Linux) |
+| `doctl`                        | DigitalOcean CLI           | Optional | `brew install doctl`        |
+| `aws`                          | AWS CLI                    | Optional | `brew install awscli`       |
+| `npm`                          | Nuxt local builds          | Optional | `brew install node`         |
 
-1. Create a hosted zone in Route53 for your domain
-2. Update your domain registrar to use AWS Route53 nameservers
-3. The tool will automatically update A records in the hosted zone
+**Install uv:**
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+**Install provider CLIs:**
+```bash
+# AWS
+brew install awscli
+aws configure
+
+# DigitalOcean
+brew install doctl
+doctl auth init
+```
+
+### SSH Key
+
+Tool automatically uploads your SSH key (`~/.ssh/id_ed25519.pub`, `id_rsa.pub`, or `id_ecdsa.pub`) to the provider on first use.
 
 ## Instance State
 
-Instance details are stored in `<name>.instance.json`:
+Instance metadata stored in `<name>.instance.json`:
 
 ```json
 {
-  "id": 543540359,
-  "ip": "170.64.235.136",
-  "provider": "digitalocean",
-  "region": "syd1",
-  "os_image": "ubuntu-24-04-x64",
-  "vm_size": "s-1vcpu-1gb",
+  "id": "i-0abc123",
+  "ip": "54.123.45.67",
+  "provider": "aws",
+  "region": "ap-southeast-2",
+  "vm_size": "t3.small",
   "user": "deploy",
   "apps": [
-    {"name": "myapp", "type": "nuxt", "port": 3000},
-    {"name": "api", "type": "fastapi", "port": 8000}
+    {"name": "api", "type": "fastapi", "port": 8000},
+    {"name": "frontend", "type": "nuxt", "port": 3000}
   ]
 }
 ```
 
-The `apps` array tracks all apps deployed on the instance. Each app entry includes:
-- `name`: App name (PM2 process name or supervisor program name)
-- `type`: App type (`nuxt` or `fastapi`)
-- `port`: Port number (optional, saved during deployment)
+DNS nameservers cached in `<domain>.nameservers.json` (auto-generated).
 
-**Multiple Apps Support**: You can deploy multiple apps to the same instance. Management commands (restart, logs) will:
-- Automatically use the app if only one exists
-- Require `--app-name` if multiple apps exist
-- Use `deploy-vm instance apps <name>` to list all apps on an instance
+## Advanced Topics
 
-## Environment Variables Reference
+- **Security**: See [DOMAIN_SETUP.md](DOMAIN_SETUP.md) for SSL/DNS details
+- **Provider comparison**: See [PROVIDER_COMPARISON.md](PROVIDER_COMPARISON.md)
+- **Multiple environments**: Use different `.env` files or AWS profiles
+- **CI/CD integration**: Use `--force` flags to skip confirmations
 
-Deploy-vm reads configuration from a `.env` file in your project root (if it exists):
+## Support
 
-| Variable | Description | Example | Default |
-|----------|-------------|---------|---------|
-| `DEPLOY_VM_PROVIDER` | Default cloud provider | `aws` or `digitalocean` | `digitalocean` |
-| `AWS_PROFILE` | AWS CLI profile name | `default`, `production`, `staging` | None |
-| `AWS_REGION` | Default AWS region | `ap-southeast-2`, `us-east-1` | `ap-southeast-2` |
-
-**Example `.env` file:**
-```bash
-# Use AWS by default
-DEPLOY_VM_PROVIDER=aws
-
-# Use specific AWS profile
-AWS_PROFILE=production
-
-# Default to Sydney region
-AWS_REGION=ap-southeast-2
-```
-
-**Priority order** (highest to lowest):
-1. Command-line flags (e.g., `--provider aws`)
-2. Environment variables in `.env` file
-3. Built-in defaults
-
-**Note:** The `.env` file is gitignored by default to prevent accidentally committing credentials.
-
+- Issues: [GitHub Issues](https://github.com/boscoh/deploy-vm/issues)
+- Documentation: `deploy-vm --help` or `deploy-vm <command> --help`

@@ -417,7 +417,19 @@ class AWSProvider:
         except ProfileNotFound:
             if is_raise_exception:
                 raise
-            warn(f"AWS profile '{profile_name}' not found")
+            available_profiles = AWSProvider._get_available_profiles()
+            if available_profiles:
+                warn(
+                    f"AWS profile '{profile_name}' not found.\n"
+                    f"Available profiles: {', '.join(available_profiles)}\n"
+                    f"To configure: aws configure --profile {profile_name}"
+                )
+            else:
+                warn(
+                    f"AWS profile '{profile_name}' not found.\n"
+                    f"To configure: aws configure --profile {profile_name}\n"
+                    f"Or remove AWS_PROFILE from .env to use default credentials"
+                )
         except ClientError as e:
             if is_raise_exception:
                 raise
@@ -456,6 +468,22 @@ class AWSProvider:
             session = boto3.Session(**self.aws_config)
             sts = session.client("sts")
             sts.get_caller_identity()
+        except ProfileNotFound as e:
+            profile_name = self.aws_config.get("profile_name")
+            available_profiles = self._get_available_profiles()
+            if available_profiles:
+                error(
+                    f"AWS profile '{profile_name}' not found.\n"
+                    f"Available profiles: {', '.join(available_profiles)}\n"
+                    f"To configure a new profile: aws configure --profile {profile_name}\n"
+                    f"Or update AWS_PROFILE in your .env file to use an existing profile"
+                )
+            else:
+                error(
+                    f"AWS profile '{profile_name}' not found.\n"
+                    f"To set up AWS credentials: aws configure --profile {profile_name}\n"
+                    f"Or remove AWS_PROFILE from .env to use default credentials"
+                )
         except Exception as e:
             error(f"AWS authentication failed: {e}")
 
@@ -576,6 +604,34 @@ class AWSProvider:
     def _get_iam_client(self):
         session = boto3.Session(**self.aws_config)
         return session.client("iam")
+
+    @staticmethod
+    def _get_available_profiles() -> list[str]:
+        """Get list of available AWS profiles from ~/.aws/credentials and ~/.aws/config."""
+        profiles = set()
+
+        # Check credentials file
+        credentials_path = os.path.expanduser("~/.aws/credentials")
+        if os.path.exists(credentials_path):
+            import configparser
+            config = configparser.ConfigParser()
+            config.read(credentials_path)
+            profiles.update(config.sections())
+
+        # Check config file
+        config_path = os.path.expanduser("~/.aws/config")
+        if os.path.exists(config_path):
+            import configparser
+            config = configparser.ConfigParser()
+            config.read(config_path)
+            for section in config.sections():
+                # Remove 'profile ' prefix from config sections
+                if section.startswith("profile "):
+                    profiles.add(section[8:])
+                elif section != "default":
+                    profiles.add(section)
+
+        return sorted(profiles)
 
     def _ensure_iam_role_and_profile(self, role_name: str) -> str:
         """Ensure IAM role and instance profile exist, return instance profile name.

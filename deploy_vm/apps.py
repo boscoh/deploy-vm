@@ -17,6 +17,7 @@ from .server import (
     rsync,
     get_ssh_user,
 )
+from .utils import get_sudo_prefix
 
 
 def compute_hash(source: str, exclude: list[str] | None = None) -> str:
@@ -366,7 +367,7 @@ class FastAPIApp(BaseApp):
 
         log(f"Deploying FastAPI to {self.ip}...")
 
-        sudo = "" if self.ssh_user == "root" else "sudo "
+        sudo = get_sudo_prefix(self.ssh_user)
 
         log("Installing uv and supervisor...")
         setup_script = dedent(f"""
@@ -451,14 +452,14 @@ class FastAPIApp(BaseApp):
 
     def restart(self):
         """Restart supervisord app."""
-        sudo = "" if self.ssh_user == "root" else "sudo "
+        sudo = get_sudo_prefix(self.ssh_user)
         log(f"Restarting {self.app_name}...")
         ssh(self.ip, f"{sudo}supervisorctl restart {self.app_name}", user=self.ssh_user)
         log("App restarted")
 
     def status(self):
         """Show supervisord status."""
-        sudo = "" if self.ssh_user == "root" else "sudo "
+        sudo = get_sudo_prefix(self.ssh_user)
         return ssh(self.ip, f"{sudo}supervisorctl status", user=self.ssh_user)
 
     def logs(self, lines: int = 50):

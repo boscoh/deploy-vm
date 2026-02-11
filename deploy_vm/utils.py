@@ -32,6 +32,15 @@ def get_ssh_user(provider_name: str) -> str:
     return "ubuntu" if provider_name == "aws" else "root"
 
 
+def get_sudo_prefix(ssh_user: str) -> str:
+    """Get sudo prefix for commands based on SSH user.
+
+    :param ssh_user: SSH username
+    :return: Empty string for root, "sudo " for other users
+    """
+    return "" if ssh_user == "root" else "sudo "
+
+
 def run_cmd(*args, check: bool = True) -> str:
     """Execute local command and return stdout."""
     result = subprocess.run(args, capture_output=True, text=True)

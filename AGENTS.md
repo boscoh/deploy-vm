@@ -4,12 +4,20 @@ Follow these instructions precisely for all sessions.
 
 ## Project Tools
 
-**Python:** Use `uv` for package management and running scripts.
+## Python
+- Use `uv` for package management and running scripts.
+- use sphinx docstrings
 
 ## Markdown
 
 - don't use emojis
 - always format tables properly with aligned columns
+
+## Code
+- omit obvious comments
+- omit obvious docstrings
+- reuse existing functions if useful
+
 
 ## Beads Workflow (MANDATORY)
 

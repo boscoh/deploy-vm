@@ -43,6 +43,7 @@ from .server import (
     check_http_status,
     ssh_write_file,
 )
+from .utils import get_sudo_prefix
 
 app = cyclopts.App(
     name="deploy-vm", help="Deploy apps to cloud providers", sort_key=None
@@ -323,7 +324,7 @@ def setup_nginx_ip(
 
     server_block = generate_nginx_server_block("_", port, static_dir, listen="80 default_server")
 
-    sudo = "" if ssh_user == "root" else "sudo "
+    sudo = get_sudo_prefix(ssh_user)
     log(f"Setting up nginx for IP access on {ip}...")
     ssh_script(ip, f"{sudo}apt-get update && {sudo}apt-get install -y nginx", user=ssh_user)
     ssh_write_file(ip, "/etc/nginx/sites-available/default", server_block, user=ssh_user)
@@ -361,7 +362,7 @@ def setup_nginx_ssl(
 
     server_block = generate_nginx_server_block(f"{domain} www.{domain}", port, static_dir)
 
-    sudo = "" if ssh_user == "root" else "sudo "
+    sudo = get_sudo_prefix(ssh_user)
     log("Setting up nginx...")
     ssh_script(ip, f"{sudo}apt-get update && {sudo}apt-get install -y nginx", user=ssh_user)
     ssh_write_file(ip, f"/etc/nginx/sites-available/{domain}", server_block, user=ssh_user)

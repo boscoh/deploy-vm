@@ -18,7 +18,7 @@ import dns.resolver
 from fabric import Connection
 from rich import print
 
-from .utils import error, get_ssh_user, log, run_cmd, run_cmd_json, warn
+from .utils import error, get_ssh_user, get_sudo_prefix, log, run_cmd, run_cmd_json, warn
 
 ProviderName = Literal["digitalocean", "aws"]
 
@@ -137,7 +137,7 @@ def _rsync_tar_fallback(
             error(f"scp upload failed: {result.stderr}")
 
         log("Extracting on remote server...")
-        sudo = "" if user == "root" else "sudo "
+        sudo = get_sudo_prefix(user)
         app_user = remote.split("/")[2] if remote.startswith("/home/") else user
         extract_script = f"""
             set -e
@@ -365,7 +365,7 @@ def setup_server(
 ):
     log(f"Setting up server at {ip}...")
 
-    sudo = "" if ssh_user == "root" else "sudo "
+    sudo = get_sudo_prefix(ssh_user)
 
     script = dedent(f"""
         set -e
@@ -419,7 +419,7 @@ def setup_server(
 
 def ensure_web_firewall(ip: str, ssh_user: str = "root"):
     log("Checking firewall...")
-    sudo = "" if ssh_user == "root" else "sudo "
+    sudo = get_sudo_prefix(ssh_user)
     result = ssh(ip, f"{sudo}ufw status", user=ssh_user)
     needs_80 = "80/tcp" not in result
     needs_443 = "443/tcp" not in result
@@ -518,7 +518,7 @@ def setup_nginx_ip(
 
     server_block = generate_nginx_server_block("_", port, static_dir, listen="80 default_server")
 
-    sudo = "" if ssh_user == "root" else "sudo "
+    sudo = get_sudo_prefix(ssh_user)
     log(f"Setting up nginx for IP access on {ip}...")
     ssh_script(ip, f"{sudo}apt-get update && {sudo}apt-get install -y nginx", user=ssh_user)
     ssh_write_file(ip, "/etc/nginx/sites-available/default", server_block, user=ssh_user)
@@ -550,7 +550,7 @@ def setup_nginx_ssl(
 
     server_block = generate_nginx_server_block(f"{domain} www.{domain}", port, static_dir)
 
-    sudo = "" if ssh_user == "root" else "sudo "
+    sudo = get_sudo_prefix(ssh_user)
     log("Setting up nginx...")
     ssh_script(ip, f"{sudo}apt-get update && {sudo}apt-get install -y nginx", user=ssh_user)
     ssh_write_file(ip, f"/etc/nginx/sites-available/{domain}", server_block, user=ssh_user)

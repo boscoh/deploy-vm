@@ -1,0 +1,15 @@
+{
+  "id": "i-0dd18fdc855f8842c",
+  "ip": "3.27.147.209",
+  "provider": "aws",
+  "region": "ap-southeast-2",
+  "vm_size": "t3.small",
+  "user": "deploy",
+  "apps": [
+    {
+      "name": "chatboti",
+      "type": "fastapi",
+      "port": 8000
+    }
+  ]
+}

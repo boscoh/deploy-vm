@@ -47,11 +47,13 @@ nuxt_app = cyclopts.App(name="nuxt", help="Deploy and manage Nuxt apps", sort_ke
 fastapi_app = cyclopts.App(
     name="fastapi", help="Deploy and manage FastAPI apps", sort_key=4
 )
+dns_app = cyclopts.App(name="dns", help="Manage DNS records", sort_key=5)
 
 app.command(instance_app)
 app.command(nginx_app)
 app.command(nuxt_app)
 app.command(fastapi_app)
+app.command(dns_app)
 
 
 @instance_app.command(name="create")
@@ -281,7 +283,6 @@ def sync_nuxt(
     :param force: Force rebuild even if source unchanged
     """
     instance = resolve_instance(target)
-    ip = instance["ip"]
     user = user or instance.get("user", "deploy")
     provider = instance.get("provider", "digitalocean")
 
@@ -601,7 +602,7 @@ def deploy_fastapi(
     log(f"Deploying {name} to {ip}")
     print("=" * 50)
 
-    full_sync = sync_fastapi(
+    sync_fastapi(
         name,
         source,
         ssh_user=ssh_user,
@@ -640,6 +641,63 @@ def deploy_fastapi(
         log(f"Done! http://{ip}")
     else:
         log(f"Done! https://{domain}")
+
+
+@dns_app.command(name="nameservers")
+def get_nameservers(
+    domain: str,
+    *,
+    provider_name: ProviderName | None = None,
+):
+    """Get nameservers for a domain.
+
+    :param domain: Domain name (e.g., example.com)
+    :param provider_name: Cloud provider (aws or digitalocean)
+    """
+    p = get_provider(provider_name)
+
+    if p.provider_name == "aws":
+        p.validate_auth()
+        route53 = p._get_route53_client()
+
+        response = route53.list_hosted_zones()
+        zone_id = None
+        zone_name = None
+
+        for zone in response["HostedZones"]:
+            if zone["Name"] == f"{domain}." or zone["Name"] == domain:
+                zone_id = zone["Id"]
+                zone_name = zone["Name"]
+                break
+
+        if not zone_id:
+            error(f"No Route53 hosted zone found for domain: {domain}")
+
+        zone_response = route53.get_hosted_zone(Id=zone_id)
+        nameservers = zone_response["DelegationSet"]["NameServers"]
+
+        print(f"Route53 Hosted Zone: {zone_name}")
+        print(f"Zone ID: {zone_id}")
+        print("\nNameservers:")
+        for ns in nameservers:
+            print(f"  {ns}")
+
+        print("\nConfigure these nameservers at your domain registrar:")
+        print("  1. Log in to your domain registrar (GoDaddy, Namecheap, etc.)")
+        print(f"  2. Find DNS/Nameserver settings for {domain}")
+        print("  3. Replace existing nameservers with the ones listed above")
+        print("  4. Wait 24-48 hours for DNS propagation")
+
+    elif p.provider_name == "digitalocean":
+        print("DigitalOcean DNS Nameservers:")
+        print("  ns1.digitalocean.com")
+        print("  ns2.digitalocean.com")
+        print("  ns3.digitalocean.com")
+        print("\nConfigure these nameservers at your domain registrar:")
+        print("  1. Log in to your domain registrar (GoDaddy, Namecheap, etc.)")
+        print(f"  2. Find DNS/Nameserver settings for {domain}")
+        print("  3. Replace existing nameservers with the ones listed above")
+        print("  4. Wait 24-48 hours for DNS propagation")
 
 
 if __name__ == "__main__":

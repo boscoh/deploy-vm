@@ -74,6 +74,19 @@ class DigitalOceanProvider:
         "s-8vcpu-16gb",
     ]
 
+    REGIONS = [
+        "syd1",
+        "sgp1",
+        "nyc1",
+        "nyc3",
+        "sfo3",
+        "lon1",
+        "fra1",
+        "ams3",
+        "tor1",
+        "blr1",
+    ]
+
     def __init__(
         self,
         os_image: str | None = None,

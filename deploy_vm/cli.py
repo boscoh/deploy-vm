@@ -72,6 +72,9 @@ def create_instance(
     """Create cloud instance and set it up.
 
     :param provider_name: Cloud provider (default: DEPLOY_VM_PROVIDER or digitalocean)
+    :param region: Cloud region
+    :param vm_size: Instance size (AWS: t3.micro, t3.small, etc. | DO: s-1vcpu-1gb, s-2vcpu-2gb, etc.)
+    :param os_image: OS image to use
     :param user: App user for running services
     :param no_setup: Skip firewall, swap, and user setup
     :param iam_role: AWS only: IAM role name for instance profile (default: deploy-vm-bedrock)
@@ -390,6 +393,7 @@ def deploy_nuxt(
 ):
     """Deploy Nuxt app: create instance, setup server, deploy app, configure nginx.
 
+    :param vm_size: Instance size (AWS: t3.micro, t3.small, etc. | DO: s-1vcpu-1gb, s-2vcpu-2gb, etc.)
     :param iam_role: AWS only: IAM role name for instance profile (default: deploy-vm-bedrock)
     """
     if not no_ssl and (not domain or not email):
@@ -584,6 +588,7 @@ def deploy_fastapi(
 ):
     """Deploy FastAPI app: create instance, setup server, deploy app, configure nginx.
 
+    :param vm_size: Instance size (AWS: t3.micro, t3.small, etc. | DO: s-1vcpu-1gb, s-2vcpu-2gb, etc.)
     :param iam_role: AWS only: IAM role name for instance profile (default: deploy-vm-bedrock)
     """
     if not no_ssl and (not domain or not email):

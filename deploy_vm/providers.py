@@ -64,6 +64,16 @@ class Provider(Protocol):
 
 
 class DigitalOceanProvider:
+    VM_SIZES = [
+        "s-1vcpu-512mb",
+        "s-1vcpu-1gb",
+        "s-1vcpu-2gb",
+        "s-2vcpu-2gb",
+        "s-2vcpu-4gb",
+        "s-4vcpu-8gb",
+        "s-8vcpu-16gb",
+    ]
+
     def __init__(
         self,
         os_image: str | None = None,
@@ -84,15 +94,11 @@ class DigitalOceanProvider:
             error("doctl not authenticated. Run: doctl auth init")
 
     def validate_config(self) -> None:
-        if (
-            self.vm_size.startswith("t3.")
-            or self.vm_size.startswith("t4g.")
-            or self.vm_size.startswith("m5.")
-        ):
+        if self.vm_size not in self.VM_SIZES:
             error(
-                f"VM size '{self.vm_size}' is an AWS instance type, not DigitalOcean.\n"
-                f"DigitalOcean sizes: s-1vcpu-1gb, s-2vcpu-2gb, s-4vcpu-8gb, etc.\n"
-                f"See PROVIDER_COMPARISON.md for size mappings."
+                f"Invalid DigitalOcean VM size: '{self.vm_size}'\n"
+                f"Valid sizes: {', '.join(self.VM_SIZES)}\n"
+                f"See PROVIDER_COMPARISON.md for details."
             )
 
     def instance_exists(self, name: str) -> bool:
@@ -276,6 +282,26 @@ class AWSProvider:
         "sa-east-1",
     ]
 
+    VM_SIZES = [
+        "t3.micro",
+        "t3.small",
+        "t3.medium",
+        "t3.large",
+        "t3.xlarge",
+        "t3.2xlarge",
+        "t4g.micro",
+        "t4g.small",
+        "t4g.medium",
+        "t4g.large",
+        "m5.large",
+        "m5.xlarge",
+        "m5.2xlarge",
+        "m6i.large",
+        "m6i.xlarge",
+        "c5.large",
+        "c5.xlarge",
+    ]
+
     def __init__(
         self,
         os_image: str | None = None,
@@ -457,11 +483,11 @@ class AWSProvider:
         return region
 
     def validate_config(self) -> None:
-        if self.vm_size.startswith("s-"):
+        if self.vm_size not in self.VM_SIZES:
             error(
-                f"VM size '{self.vm_size}' is a DigitalOcean size, not AWS.\n"
-                f"AWS instance types: t3.micro, t3.small, t3.medium, t3.large, etc.\n"
-                f"See PROVIDER_COMPARISON.md for size mappings."
+                f"Invalid AWS instance type: '{self.vm_size}'\n"
+                f"Valid types: {', '.join(self.VM_SIZES[:6])}, ...\n"
+                f"See PROVIDER_COMPARISON.md for full list."
             )
 
     def _get_ec2_client(self):

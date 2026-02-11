@@ -46,8 +46,6 @@ class Provider(Protocol):
 
     def validate_auth(self) -> None: ...
 
-    def validate_config(self) -> None: ...
-
     def instance_exists(self, name: str) -> bool: ...
 
     def create_instance(
@@ -97,7 +95,13 @@ class DigitalOceanProvider:
         self.region = region or "syd1"
         self.os_image = os_image or "ubuntu-24-04-x64"
         self.vm_size = vm_size or "s-1vcpu-1gb"
-        self.validate_config()
+
+        if self.vm_size not in self.VM_SIZES:
+            error(
+                f"Invalid DigitalOcean VM size: '{self.vm_size}'\n"
+                f"Valid sizes: {', '.join(self.VM_SIZES)}\n"
+                f"See PROVIDER_COMPARISON.md for details."
+            )
 
     def validate_auth(self) -> None:
         result = subprocess.run(
@@ -105,14 +109,6 @@ class DigitalOceanProvider:
         )
         if result.returncode != 0:
             error("doctl not authenticated. Run: doctl auth init")
-
-    def validate_config(self) -> None:
-        if self.vm_size not in self.VM_SIZES:
-            error(
-                f"Invalid DigitalOcean VM size: '{self.vm_size}'\n"
-                f"Valid sizes: {', '.join(self.VM_SIZES)}\n"
-                f"See PROVIDER_COMPARISON.md for details."
-            )
 
     def instance_exists(self, name: str) -> bool:
         droplets = run_cmd_json("doctl", "compute", "droplet", "list")
@@ -343,7 +339,12 @@ class AWSProvider:
                 "  export AWS_REGION=ap-southeast-2"
             )
 
-        self.validate_config()
+        if self.vm_size not in self.VM_SIZES:
+            error(
+                f"Invalid AWS instance type: '{self.vm_size}'\n"
+                f"Valid types: {', '.join(self.VM_SIZES[:6])}, ...\n"
+                f"See PROVIDER_COMPARISON.md for full list."
+            )
 
     @staticmethod
     def get_aws_config(is_raise_exception: bool = True):
@@ -494,14 +495,6 @@ class AWSProvider:
             )
 
         return region
-
-    def validate_config(self) -> None:
-        if self.vm_size not in self.VM_SIZES:
-            error(
-                f"Invalid AWS instance type: '{self.vm_size}'\n"
-                f"Valid types: {', '.join(self.VM_SIZES[:6])}, ...\n"
-                f"See PROVIDER_COMPARISON.md for full list."
-            )
 
     def _get_ec2_client(self):
         return self._get_session().client("ec2")

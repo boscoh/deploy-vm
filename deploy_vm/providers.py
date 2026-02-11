@@ -596,6 +596,116 @@ class AWSProvider:
 
         return key_name
 
+    def _ensure_security_group(self, ec2) -> str:
+        """Ensure security group exists in AWS, create if needed.
+
+        :param ec2: EC2 client
+        :return: Security group ID
+        """
+        sg_name = "deploy-vm-web"
+        try:
+            response = ec2.describe_security_groups(
+                Filters=[{"Name": "group-name", "Values": [sg_name]}]
+            )
+            if response["SecurityGroups"]:
+                sg_id = response["SecurityGroups"][0]["GroupId"]
+                log(f"Using existing security group: {sg_name}")
+            else:
+                raise ClientError(
+                    {"Error": {"Code": "InvalidGroup.NotFound"}},
+                    "DescribeSecurityGroups",
+                )
+        except ClientError as e:
+            if e.response["Error"]["Code"] in [
+                "InvalidGroup.NotFound",
+                "VPCIdNotSpecified",
+            ]:
+                log("Creating security group...")
+
+                vpcs = ec2.describe_vpcs()["Vpcs"]
+                if not vpcs:
+                    error(
+                        "No VPC found in this region. Please create a VPC first:\n"
+                        "  aws ec2 create-default-vpc --region "
+                        + self.aws_config.get("region_name", "ap-southeast-2")
+                    )
+
+                default_vpc = next((v for v in vpcs if v.get("IsDefault")), None)
+                vpc_id = default_vpc["VpcId"] if default_vpc else vpcs[0]["VpcId"]
+
+                is_valid, error_msg = self._validate_vpc(ec2, vpc_id)
+                if not is_valid:
+                    error(
+                        f"VPC {vpc_id} is not properly configured: {error_msg}\n"
+                        f"The VPC needs:\n"
+                        f"  1. Subnets (for instance placement)\n"
+                        f"  2. Internet gateway (for outbound connectivity)\n"
+                        f"  3. Route table with route to internet gateway (for public access)\n"
+                        f"Fix with: aws ec2 create-default-vpc --region {self.aws_config.get('region_name', 'ap-southeast-2')}"
+                    )
+
+                log(f"Using VPC: {vpc_id}")
+
+                response = ec2.create_security_group(
+                    GroupName=sg_name,
+                    Description="Security group for deploy-vm web servers",
+                    VpcId=vpc_id,
+                    TagSpecifications=[
+                        {
+                            "ResourceType": "security-group",
+                            "Tags": [
+                                {"Key": "Name", "Value": sg_name},
+                                {"Key": "ManagedBy", "Value": "deploy-vm"},
+                                {
+                                    "Key": "CreatedAt",
+                                    "Value": datetime.now(timezone.utc).isoformat(),
+                                },
+                            ],
+                        }
+                    ],
+                )
+                sg_id = response["GroupId"]
+
+                my_ip = self._get_my_ip()
+                ssh_cidr = f"{my_ip}/32" if my_ip else "0.0.0.0/0"
+                if my_ip:
+                    log(f"Restricting SSH access to your IP: {my_ip}")
+
+                ec2.authorize_security_group_ingress(
+                    GroupId=sg_id,
+                    IpPermissions=[
+                        {
+                            "IpProtocol": "tcp",
+                            "FromPort": 22,
+                            "ToPort": 22,
+                            "IpRanges": [
+                                {"CidrIp": ssh_cidr, "Description": "SSH access"}
+                            ],
+                        },
+                        {
+                            "IpProtocol": "tcp",
+                            "FromPort": 80,
+                            "ToPort": 80,
+                            "IpRanges": [
+                                {"CidrIp": "0.0.0.0/0", "Description": "HTTP access"}
+                            ],
+                        },
+                        {
+                            "IpProtocol": "tcp",
+                            "FromPort": 443,
+                            "ToPort": 443,
+                            "IpRanges": [
+                                {"CidrIp": "0.0.0.0/0", "Description": "HTTPS access"}
+                            ],
+                        },
+                    ],
+                )
+                log(f"Created security group: {sg_name}")
+            else:
+                raise
+
+        return sg_id
+
     def _get_session(self):
         """Get boto3 session using aws_config."""
         return boto3.Session(**self.aws_config)
@@ -748,108 +858,7 @@ class AWSProvider:
             instance_profile_name = self._ensure_iam_role_and_profile(iam_role)
 
         key_name = self._ensure_ssh_key(ec2)
-
-        sg_name = "deploy-vm-web"
-        try:
-            response = ec2.describe_security_groups(
-                Filters=[{"Name": "group-name", "Values": [sg_name]}]
-            )
-            if response["SecurityGroups"]:
-                sg_id = response["SecurityGroups"][0]["GroupId"]
-                log(f"Using existing security group: {sg_name}")
-            else:
-                raise ClientError(
-                    {"Error": {"Code": "InvalidGroup.NotFound"}},
-                    "DescribeSecurityGroups",
-                )
-        except ClientError as e:
-            if e.response["Error"]["Code"] in [
-                "InvalidGroup.NotFound",
-                "VPCIdNotSpecified",
-            ]:
-                log("Creating security group...")
-
-                vpcs = ec2.describe_vpcs()["Vpcs"]
-                if not vpcs:
-                    error(
-                        "No VPC found in this region. Please create a VPC first:\n"
-                        "  aws ec2 create-default-vpc --region "
-                        + self.aws_config.get("region_name", "ap-southeast-2")
-                    )
-
-                default_vpc = next((v for v in vpcs if v.get("IsDefault")), None)
-                vpc_id = default_vpc["VpcId"] if default_vpc else vpcs[0]["VpcId"]
-
-                is_valid, error_msg = self._validate_vpc(ec2, vpc_id)
-                if not is_valid:
-                    error(
-                        f"VPC {vpc_id} is not properly configured: {error_msg}\n"
-                        f"The VPC needs:\n"
-                        f"  1. Subnets (for instance placement)\n"
-                        f"  2. Internet gateway (for outbound connectivity)\n"
-                        f"  3. Route table with route to internet gateway (for public access)\n"
-                        f"Fix with: aws ec2 create-default-vpc --region {self.aws_config.get('region_name', 'ap-southeast-2')}"
-                    )
-
-                log(f"Using VPC: {vpc_id}")
-
-                response = ec2.create_security_group(
-                    GroupName=sg_name,
-                    Description="Security group for deploy-vm web servers",
-                    VpcId=vpc_id,
-                    TagSpecifications=[
-                        {
-                            "ResourceType": "security-group",
-                            "Tags": [
-                                {"Key": "Name", "Value": sg_name},
-                                {"Key": "ManagedBy", "Value": "deploy-vm"},
-                                {
-                                    "Key": "CreatedAt",
-                                    "Value": datetime.now(timezone.utc).isoformat(),
-                                },
-                            ],
-                        }
-                    ],
-                )
-                sg_id = response["GroupId"]
-
-                my_ip = self._get_my_ip()
-                ssh_cidr = f"{my_ip}/32" if my_ip else "0.0.0.0/0"
-                if my_ip:
-                    log(f"Restricting SSH access to your IP: {my_ip}")
-
-                ec2.authorize_security_group_ingress(
-                    GroupId=sg_id,
-                    IpPermissions=[
-                        {
-                            "IpProtocol": "tcp",
-                            "FromPort": 22,
-                            "ToPort": 22,
-                            "IpRanges": [
-                                {"CidrIp": ssh_cidr, "Description": "SSH access"}
-                            ],
-                        },
-                        {
-                            "IpProtocol": "tcp",
-                            "FromPort": 80,
-                            "ToPort": 80,
-                            "IpRanges": [
-                                {"CidrIp": "0.0.0.0/0", "Description": "HTTP access"}
-                            ],
-                        },
-                        {
-                            "IpProtocol": "tcp",
-                            "FromPort": 443,
-                            "ToPort": 443,
-                            "IpRanges": [
-                                {"CidrIp": "0.0.0.0/0", "Description": "HTTPS access"}
-                            ],
-                        },
-                    ],
-                )
-                log(f"Created security group: {sg_name}")
-            else:
-                raise
+        sg_id = self._ensure_security_group(ec2)
 
         log(f"Creating EC2 instance '{name}' ({vm_size})...")
 

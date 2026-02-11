@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import json
 import os
 import subprocess
 from datetime import datetime, timezone
@@ -113,7 +114,9 @@ class Provider(Protocol):
 
     def instance_exists(self, name: str) -> bool: ...
 
-    def create_instance(self, name: str, region: str, vm_size: str) -> dict: ...
+    def create_instance(
+        self, name: str, region: str, vm_size: str, iam_role: str | None = None
+    ) -> dict: ...
 
     def delete_instance(self, instance_id: str) -> None: ...
 
@@ -175,7 +178,9 @@ class DigitalOceanProvider:
         )
         return {"id": droplet["id"], "ip": ip}
 
-    def create_instance(self, name: str, region: str, vm_size: str) -> dict:
+    def create_instance(
+        self, name: str, region: str, vm_size: str, iam_role: str | None = None
+    ) -> dict:
         self.validate_auth()
 
         if self.instance_exists(name):
@@ -537,6 +542,97 @@ class AWSProvider:
         )
         return images[0]["ImageId"]
 
+    def _get_iam_client(self):
+        return boto3.client("iam", **self.aws_config)
+
+    def _ensure_iam_role_and_profile(self, role_name: str) -> str:
+        """Ensure IAM role and instance profile exist, return instance profile name.
+
+        Creates:
+        1. IAM role with EC2 trust policy
+        2. Attaches AmazonBedrockFullAccess policy
+        3. Instance profile with same name
+        4. Adds role to instance profile
+
+        Returns the instance profile name (same as role name).
+        """
+        iam = self._get_iam_client()
+
+        # EC2 assume role trust policy
+        trust_policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {"Service": "ec2.amazonaws.com"},
+                    "Action": "sts:AssumeRole"
+                }
+            ]
+        }
+
+        # Create IAM role if it doesn't exist
+        try:
+            iam.get_role(RoleName=role_name)
+            log(f"Using existing IAM role: {role_name}")
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "NoSuchEntity":
+                log(f"Creating IAM role: {role_name}")
+                iam.create_role(
+                    RoleName=role_name,
+                    AssumeRolePolicyDocument=json.dumps(trust_policy),
+                    Description=f"Role for deploy-vm managed instances (Bedrock access)",
+                    Tags=[
+                        {"Key": "ManagedBy", "Value": "deploy-vm"},
+                        {"Key": "CreatedAt", "Value": datetime.now(timezone.utc).isoformat()},
+                    ]
+                )
+                log(f"Created IAM role: {role_name}")
+            else:
+                raise
+
+        # Attach AmazonBedrockFullAccess managed policy
+        bedrock_policy_arn = "arn:aws:iam::aws:policy/AmazonBedrockFullAccess"
+        try:
+            iam.attach_role_policy(RoleName=role_name, PolicyArn=bedrock_policy_arn)
+            log(f"Attached AmazonBedrockFullAccess policy to {role_name}")
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "EntityAlreadyExists":
+                # Policy might already be attached, that's fine
+                pass
+
+        # Create instance profile if it doesn't exist
+        profile_name = role_name
+        try:
+            iam.get_instance_profile(InstanceProfileName=profile_name)
+            log(f"Using existing instance profile: {profile_name}")
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "NoSuchEntity":
+                log(f"Creating instance profile: {profile_name}")
+                iam.create_instance_profile(
+                    InstanceProfileName=profile_name,
+                    Tags=[
+                        {"Key": "ManagedBy", "Value": "deploy-vm"},
+                        {"Key": "CreatedAt", "Value": datetime.now(timezone.utc).isoformat()},
+                    ]
+                )
+                log(f"Created instance profile: {profile_name}")
+            else:
+                raise
+
+        # Add role to instance profile
+        try:
+            iam.add_role_to_instance_profile(
+                InstanceProfileName=profile_name,
+                RoleName=role_name
+            )
+            log(f"Added role {role_name} to instance profile")
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "LimitExceeded":
+                # Role might already be in profile, that's fine
+                pass
+
+        return profile_name
+
     def instance_exists(self, name: str) -> bool:
         ec2 = self._get_ec2_client()
         response = ec2.describe_instances(
@@ -568,7 +664,9 @@ class AWSProvider:
             "ip": instance.get("PublicIpAddress", "N/A"),
         }
 
-    def create_instance(self, name: str, region: str, vm_size: str) -> dict:
+    def create_instance(
+        self, name: str, region: str, vm_size: str, iam_role: str | None = None
+    ) -> dict:
         self.validate_auth()
 
         if self.instance_exists(name):
@@ -578,6 +676,11 @@ class AWSProvider:
 
         ami_id = self._find_ami(ec2)
         log(f"Using AMI: {ami_id}")
+
+        # Setup IAM role if specified
+        instance_profile_name = None
+        if iam_role:
+            instance_profile_name = self._ensure_iam_role_and_profile(iam_role)
 
         key_content, fingerprint = get_local_ssh_key()
         key_name = f"deploy-vm-{fingerprint[-8:]}"
@@ -696,14 +799,15 @@ class AWSProvider:
                 raise
 
         log(f"Creating EC2 instance '{name}' ({vm_size})...")
-        response = ec2.run_instances(
-            ImageId=ami_id,
-            InstanceType=vm_size,
-            KeyName=key_name,
-            SecurityGroupIds=[sg_id],
-            MinCount=1,
-            MaxCount=1,
-            TagSpecifications=[
+
+        run_params = {
+            "ImageId": ami_id,
+            "InstanceType": vm_size,
+            "KeyName": key_name,
+            "SecurityGroupIds": [sg_id],
+            "MinCount": 1,
+            "MaxCount": 1,
+            "TagSpecifications": [
                 {
                     "ResourceType": "instance",
                     "Tags": [
@@ -717,7 +821,13 @@ class AWSProvider:
                     ],
                 }
             ],
-        )
+        }
+
+        if instance_profile_name:
+            run_params["IamInstanceProfile"] = {"Name": instance_profile_name}
+            log(f"Attaching IAM instance profile: {instance_profile_name}")
+
+        response = ec2.run_instances(**run_params)
 
         instance_id = response["Instances"][0]["InstanceId"]
         log("Waiting for instance to start...")

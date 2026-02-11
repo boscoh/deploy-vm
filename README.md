@@ -19,6 +19,7 @@ Create `.env` in your project root:
 DEPLOY_VM_PROVIDER=aws
 AWS_PROFILE=default
 AWS_REGION=ap-southeast-2
+IAM_ROLE=bedrock-access  # Optional: for Bedrock/AWS service access
 
 # Or use DigitalOcean
 DEPLOY_VM_PROVIDER=digitalocean
@@ -52,6 +53,28 @@ uv run deploy-vm nginx ssl my-server example.com you@example.com --port 8000
 **Supported apps:**
 - `fastapi deploy` - FastAPI apps with uvicorn + supervisord
 - `nuxt deploy` - Nuxt apps with PM2
+
+**FastAPI deployment requirements:**
+- Uses `uv` for Python package management
+- Expects `pyproject.toml` with project dependencies
+- Runs via `uvicorn` with supervisord for process management
+- App source must be a valid Python package
+
+**AWS Bedrock and IAM roles:**
+```bash
+# Deploy with Bedrock access (creates IAM role automatically)
+uv run deploy-vm fastapi deploy my-server /path/to/app \
+    --iam-role bedrock-access --no-ssl
+
+# Or set in .env:
+IAM_ROLE=bedrock-access
+```
+
+The `--iam-role` flag (AWS only):
+- Creates IAM role with EC2 trust policy
+- Attaches `AmazonBedrockFullAccess` managed policy
+- Creates and attaches instance profile
+- Enables Bedrock API access from your application
 
 ### 3. Manage Your Deployment
 
@@ -149,6 +172,7 @@ deploy-vm nuxt deploy|sync|restart|status|logs
 - `--domain <domain>` - Domain for SSL
 - `--no-ssl` - Skip SSL configuration
 - `--app-name <name>` - App identifier (for multiple apps)
+- `--iam-role <name>` - AWS only: IAM role for Bedrock/AWS service access
 
 See full command documentation: `deploy-vm <command> --help`
 
@@ -190,42 +214,30 @@ ns3.digitalocean.com
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-**Install and configure provider CLIs:**
-
-**AWS:**
+**Install provider CLIs:**
 ```bash
-# Install
+# AWS
 brew install awscli
-
-# Configure credentials (creates ~/.aws/credentials)
 aws configure
-# Prompts for: Access Key ID, Secret Access Key, Region, Output format
-```
 
-**DigitalOcean:**
-```bash
-# Install
+# DigitalOcean
 brew install doctl
-
-# Authenticate with your DigitalOcean account
 doctl auth init
-# Opens browser to generate API token, then paste token when prompted
-```
-
-**Using .env file (optional):**
-```bash
-# AWS - Use specific profile and region
-echo "DEPLOY_VM_PROVIDER=aws" >> .env
-echo "AWS_PROFILE=default" >> .env
-echo "AWS_REGION=ap-southeast-2" >> .env
-
-# DigitalOcean - Set as default provider
-echo "DEPLOY_VM_PROVIDER=digitalocean" >> .env
 ```
 
 ### SSH Key
 
 Tool automatically uploads your SSH key (`~/.ssh/id_ed25519.pub`, `id_rsa.pub`, or `id_ecdsa.pub`) to the provider on first use.
+
+### Server Access
+
+All server operations use the `deploy` user by default after initial setup:
+
+1. **Initial creation**: Connects as cloud default user (`root` for DigitalOcean, `ubuntu` for AWS)
+2. **Setup**: Creates `deploy` user with passwordless sudo privileges
+3. **All subsequent operations**: Use `deploy` user with `sudo` for privileged commands
+
+This follows security best practices by avoiding direct root access while maintaining full control. You can override the SSH user with `--ssh-user` flag if needed.
 
 ## Instance State
 
@@ -237,8 +249,10 @@ Instance metadata stored in `<name>.instance.json`:
   "ip": "54.123.45.67",
   "provider": "aws",
   "region": "ap-southeast-2",
+  "os_image": "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*",
   "vm_size": "t3.small",
   "user": "deploy",
+  "iam_role": "bedrock-access",
   "apps": [
     {"name": "api", "type": "fastapi", "port": 8000},
     {"name": "frontend", "type": "nuxt", "port": 3000}

@@ -24,6 +24,7 @@ class InstanceData(TypedDict, total=False):
     os_image: str
     vm_size: str
     user: str
+    iam_role: str  # AWS only: IAM role name for instance profile
     apps: list[AppInfo]
 
 

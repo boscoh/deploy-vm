@@ -67,31 +67,35 @@ def create_instance(
     user: str = "deploy",
     swap_size: str = "4G",
     no_setup: bool = False,
+    iam_role: str | None = None,
 ):
     """Create cloud instance and set it up.
 
     :param provider_name: Cloud provider (default: DEPLOY_VM_PROVIDER or digitalocean)
     :param user: App user for running services
     :param no_setup: Skip firewall, swap, and user setup
+    :param iam_role: AWS only: IAM role name for instance profile (e.g. for Bedrock access)
     """
     p = get_provider(provider_name, region=region, os_image=os_image, vm_size=vm_size)
 
     log(
         f"Creating instance '{name}' on {p.provider_name} in {p.region} ({p.vm_size})..."
     )
-    result = p.create_instance(name, p.region, p.vm_size)
+    result = p.create_instance(name, p.region, p.vm_size, iam_role=iam_role)
 
-    save_instance(
-        name,
-        {
-            "id": result["id"],
-            "ip": result["ip"],
-            "provider": p.provider_name,
-            "region": p.region,
-            "vm_size": p.vm_size,
-            "user": user,
-        },
-    )
+    instance_data = {
+        "id": result["id"],
+        "ip": result["ip"],
+        "provider": p.provider_name,
+        "region": p.region,
+        "os_image": p.os_image,
+        "vm_size": p.vm_size,
+        "user": user,
+    }
+    if iam_role:
+        instance_data["iam_role"] = iam_role
+
+    save_instance(name, instance_data)
 
     log("Instance ready!")
     print(f"  IP: {result['ip']}")
@@ -215,7 +219,7 @@ def verify_command(
     name: str,
     *,
     domain: str | None = None,
-    ssh_user: str = "root",
+    ssh_user: str = "deploy",
 ):
     """Verify instance health: SSH, firewall, DNS, nginx, app.
 
@@ -232,7 +236,7 @@ def nginx_ip_command(
     *,
     port: int = 3000,
     static_dir: str | None = None,
-    ssh_user: str = "root",
+    ssh_user: str = "deploy",
 ):
     """Setup nginx for IP-only access (no SSL)."""
     ip = resolve_ip(target)
@@ -248,7 +252,7 @@ def nginx_ssl_command(
     port: int = 3000,
     static_dir: str | None = None,
     skip_dns: bool = False,
-    ssh_user: str = "root",
+    ssh_user: str = "deploy",
     provider_name: ProviderName = "digitalocean",
 ):
     """Setup nginx and SSL certificate."""
@@ -367,7 +371,7 @@ def deploy_nuxt(
     domain: str | None = None,
     email: str | None = None,
     user: str = "deploy",
-    ssh_user: str = "root",
+    ssh_user: str = "deploy",
     port: int = 3000,
     app_name: str = "nuxt",
     provider_name: ProviderName = "digitalocean",
@@ -378,8 +382,12 @@ def deploy_nuxt(
     node_version: int = 20,
     local_build: bool = True,
     no_ssl: bool = False,
+    iam_role: str | None = None,
 ):
-    """Deploy Nuxt app: create instance, setup server, deploy app, configure nginx."""
+    """Deploy Nuxt app: create instance, setup server, deploy app, configure nginx.
+
+    :param iam_role: AWS only: IAM role name for instance profile
+    """
     if not no_ssl and (not domain or not email):
         error("--domain and --email are required unless --no-ssl is set")
 
@@ -394,6 +402,7 @@ def deploy_nuxt(
             os_image=os_image,
             user=user,
             swap_size=swap_size,
+            iam_role=iam_role,
         )
 
     data = load_instance(name)
@@ -412,7 +421,6 @@ def deploy_nuxt(
     sync_nuxt(
         name,
         source,
-        ssh_user=ssh_user,
         port=port,
         app_name=app_name,
         local_build=local_build,
@@ -567,8 +575,12 @@ def deploy_fastapi(
     os_image: str | None = None,
     swap_size: str = "4G",
     no_ssl: bool = False,
+    iam_role: str | None = None,
 ):
-    """Deploy FastAPI app: create instance, setup server, deploy app, configure nginx."""
+    """Deploy FastAPI app: create instance, setup server, deploy app, configure nginx.
+
+    :param iam_role: AWS only: IAM role name for instance profile (e.g. for Bedrock access)
+    """
     if not no_ssl and (not domain or not email):
         error("--domain and --email are required unless --no-ssl is set")
 
@@ -583,6 +595,7 @@ def deploy_fastapi(
             os_image=os_image,
             user=user,
             swap_size=swap_size,
+            iam_role=iam_role,
         )
 
     data = load_instance(name)

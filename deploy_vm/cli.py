@@ -43,7 +43,7 @@ from .server import (
     check_http_status,
     ssh_write_file,
 )
-from .utils import get_sudo_prefix
+from .utils import get_sudo_prefix, resolve_app_name
 
 app = cyclopts.App(
     name="deploy-vm", help="Deploy apps to cloud providers", sort_key=None
@@ -445,14 +445,8 @@ def restart_pm2(target: str, *, user: str | None = None, ssh_user: str = "root",
 
     apps = [app for app in get_instance_apps(instance) if app["type"] == "nuxt"]
 
-    if app_name is None:
-        if len(apps) == 1:
-            app_name = apps[0]["name"]
-        elif len(apps) > 1:
-            app_names = ", ".join(app["name"] for app in apps)
-            error(f"Multiple Nuxt apps found: {app_names}. Use --app-name to specify.")
-        else:
-            app_name = target if not target.replace(".", "").isdigit() else "nuxt"
+    fallback = target if not target.replace(".", "").isdigit() else "nuxt"
+    app_name = resolve_app_name(apps, "Nuxt", app_name, fallback)
 
     nuxt = NuxtApp(instance, provider, user=user, app_name=app_name)
     nuxt.restart()
@@ -486,14 +480,8 @@ def show_pm2_logs(
 
     apps = [app for app in get_instance_apps(instance) if app["type"] == "nuxt"]
 
-    if app_name is None:
-        if len(apps) == 1:
-            app_name = apps[0]["name"]
-        elif len(apps) > 1:
-            app_names = ", ".join(app["name"] for app in apps)
-            error(f"Multiple Nuxt apps found: {app_names}. Use --app-name to specify.")
-        else:
-            app_name = target if not target.replace(".", "").isdigit() else "nuxt"
+    fallback = target if not target.replace(".", "").isdigit() else "nuxt"
+    app_name = resolve_app_name(apps, "Nuxt", app_name, fallback)
 
     nuxt = NuxtApp(instance, provider, user=user, app_name=app_name)
     print(nuxt.logs(lines))
@@ -636,14 +624,8 @@ def restart_supervisor(
 
     apps = [app for app in get_instance_apps(instance) if app["type"] == "fastapi"]
 
-    if app_name is None:
-        if len(apps) == 1:
-            app_name = apps[0]["name"]
-        elif len(apps) > 1:
-            app_names = ", ".join(app["name"] for app in apps)
-            error(f"Multiple FastAPI apps found: {app_names}. Use --app-name to specify.")
-        else:
-            app_name = target if not target.replace(".", "").isdigit() else "fastapi"
+    fallback = target if not target.replace(".", "").isdigit() else "fastapi"
+    app_name = resolve_app_name(apps, "FastAPI", app_name, fallback)
 
     user = instance.get("user", "deploy")
     fastapi = FastAPIApp(instance, provider, user=user, app_name=app_name)
@@ -675,14 +657,8 @@ def show_supervisor_logs(
 
     apps = [app for app in get_instance_apps(instance) if app["type"] == "fastapi"]
 
-    if app_name is None:
-        if len(apps) == 1:
-            app_name = apps[0]["name"]
-        elif len(apps) > 1:
-            app_names = ", ".join(app["name"] for app in apps)
-            error(f"Multiple FastAPI apps found: {app_names}. Use --app-name to specify.")
-        else:
-            app_name = target if not target.replace(".", "").isdigit() else "fastapi"
+    fallback = target if not target.replace(".", "").isdigit() else "fastapi"
+    app_name = resolve_app_name(apps, "FastAPI", app_name, fallback)
 
     user = instance.get("user", "deploy")
     fastapi = FastAPIApp(instance, provider, user=user, app_name=app_name)

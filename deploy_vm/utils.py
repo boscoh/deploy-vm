@@ -41,6 +41,33 @@ def get_sudo_prefix(ssh_user: str) -> str:
     return "" if ssh_user == "root" else "sudo "
 
 
+def resolve_app_name(
+    apps: list[dict],
+    app_type: str,
+    app_name: str | None = None,
+    fallback: str | None = None
+) -> str:
+    """Resolve app name when multiple apps exist on instance.
+
+    :param apps: List of app dicts with 'name' and 'type' keys
+    :param app_type: App type to filter by (nuxt or fastapi)
+    :param app_name: Explicit app name (optional)
+    :param fallback: Fallback name if no apps found
+    :return: Resolved app name
+    :raises: SystemExit if multiple apps found without explicit name
+    """
+    if app_name is not None:
+        return app_name
+
+    if len(apps) == 1:
+        return apps[0]["name"]
+    elif len(apps) > 1:
+        app_names = ", ".join(app["name"] for app in apps)
+        error(f"Multiple {app_type} apps found: {app_names}. Use --app-name to specify.")
+    else:
+        return fallback if fallback else app_type
+
+
 def run_cmd(*args, check: bool = True) -> str:
     """Execute local command and return stdout."""
     result = subprocess.run(args, capture_output=True, text=True)

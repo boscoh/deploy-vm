@@ -101,75 +101,6 @@ def get_local_ssh_key() -> tuple[str, str]:
     error(f"No SSH key found in ~/.ssh/ (tried: {', '.join(key_names)})")
 
 
-def get_aws_config(is_raise_exception: bool = True):
-    """Get AWS configuration for boto3 client initialization.
-
-    Searches AWS_PROFILE and AWS_REGION environment variables, validates
-    credentials via STS GetCallerIdentity, and checks token expiration.
-
-    :return: Dict with profile_name and region_name keys
-    """
-    load_dotenv()
-
-    aws_config = {}
-
-    profile_name = os.getenv("AWS_PROFILE")
-    if profile_name:
-        aws_config["profile_name"] = profile_name
-
-    region = os.getenv("AWS_REGION")
-    if region:
-        aws_config["region_name"] = region
-
-    try:
-        aws_credentials_path = os.path.expanduser("~/.aws/credentials")
-        if not os.path.exists(aws_credentials_path):
-            log("No AWS credentials file at ~/.aws/credentials")
-            return aws_config
-
-        session = (
-            boto3.Session(profile_name=profile_name)
-            if profile_name
-            else boto3.Session()
-        )
-        credentials = session.get_credentials()
-
-        if not credentials or not credentials.access_key or not credentials.secret_key:
-            return aws_config
-
-        sts = session.client("sts")
-        _ = sts.get_caller_identity()
-
-        if hasattr(credentials, "token"):
-            creds = credentials.get_frozen_credentials()
-            if hasattr(creds, "expiry_time") and creds.expiry_time < datetime.now(
-                timezone.utc
-            ):
-                warn(f"AWS credentials expired on {creds.expiry_time}")
-                return aws_config
-
-    except ProfileNotFound:
-        if is_raise_exception:
-            raise
-        warn(f"AWS profile '{profile_name}' not found")
-    except ClientError as e:
-        if is_raise_exception:
-            raise
-        error_code = e.response["Error"]["Code"]
-        if error_code == "ExpiredToken":
-            warn("AWS credentials have expired")
-        elif error_code == "InvalidClientTokenId":
-            warn("AWS credentials are invalid. Please reconfigure:\n  aws configure\n")
-        else:
-            warn(f"AWS API error: {error_code}")
-    except Exception as e:
-        if is_raise_exception:
-            raise
-        warn(f"AWS credential check failed: {e}")
-
-    return aws_config
-
-
 class Provider(Protocol):
     provider_name: ProviderName
     region: str
@@ -396,7 +327,7 @@ class AWSProvider:
             os_image or "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"
         )
         self.vm_size = vm_size or "t3.micro"
-        self.aws_config = get_aws_config(is_raise_exception=False)
+        self.aws_config = AWSProvider.get_aws_config(is_raise_exception=False)
 
         if region:
             self.aws_config["region_name"] = region
@@ -414,6 +345,75 @@ class AWSProvider:
             )
 
         self.validate_config()
+
+    @staticmethod
+    def get_aws_config(is_raise_exception: bool = True):
+        """Get AWS configuration for boto3 client initialization.
+
+        Searches AWS_PROFILE and AWS_REGION environment variables, validates
+        credentials via STS GetCallerIdentity, and checks token expiration.
+
+        :return: Dict with profile_name and region_name keys
+        """
+        load_dotenv()
+
+        aws_config = {}
+
+        profile_name = os.getenv("AWS_PROFILE")
+        if profile_name:
+            aws_config["profile_name"] = profile_name
+
+        region = os.getenv("AWS_REGION")
+        if region:
+            aws_config["region_name"] = region
+
+        try:
+            aws_credentials_path = os.path.expanduser("~/.aws/credentials")
+            if not os.path.exists(aws_credentials_path):
+                log("No AWS credentials file at ~/.aws/credentials")
+                return aws_config
+
+            session = (
+                boto3.Session(profile_name=profile_name)
+                if profile_name
+                else boto3.Session()
+            )
+            credentials = session.get_credentials()
+
+            if not credentials or not credentials.access_key or not credentials.secret_key:
+                return aws_config
+
+            sts = session.client("sts")
+            _ = sts.get_caller_identity()
+
+            if hasattr(credentials, "token"):
+                creds = credentials.get_frozen_credentials()
+                if hasattr(creds, "expiry_time") and creds.expiry_time < datetime.now(
+                    timezone.utc
+                ):
+                    warn(f"AWS credentials expired on {creds.expiry_time}")
+                    return aws_config
+
+        except ProfileNotFound:
+            if is_raise_exception:
+                raise
+            warn(f"AWS profile '{profile_name}' not found")
+        except ClientError as e:
+            if is_raise_exception:
+                raise
+            error_code = e.response["Error"]["Code"]
+            if error_code == "ExpiredToken":
+                warn("AWS credentials have expired")
+            elif error_code == "InvalidClientTokenId":
+                warn("AWS credentials are invalid. Please reconfigure:\n  aws configure\n")
+            else:
+                warn(f"AWS API error: {error_code}")
+        except Exception as e:
+            if is_raise_exception:
+                raise
+            warn(f"AWS credential check failed: {e}")
+
+        return aws_config
 
     def validate_auth(self) -> None:
         try:

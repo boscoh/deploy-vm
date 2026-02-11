@@ -888,7 +888,7 @@ class AWSProvider:
         if not ip:
             error("No public IP address assigned to instance")
 
-        return {"id": instance_id, "ip": ip}
+        return {"id": instance_id, "ip": ip, "os_image": ami_id}
 
     def delete_instance(self, instance_id: str) -> None:
         self.validate_auth()

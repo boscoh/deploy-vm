@@ -28,11 +28,12 @@ class InstanceData(TypedDict, total=False):
     apps: list[AppInfo]
 
 
-class InstanceResult(TypedDict):
+class InstanceResult(TypedDict, total=False):
     """Result from creating an instance."""
 
     id: str | int
     ip: str
+    os_image: str  # AWS only: resolved AMI ID
 
 
 class InstanceListItem(TypedDict):

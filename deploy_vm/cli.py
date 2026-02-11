@@ -95,7 +95,7 @@ def create_instance(
         "ip": result["ip"],
         "provider": p.provider_name,
         "region": p.region,
-        "os_image": p.os_image,
+        "os_image": result.get("os_image", p.os_image),
         "vm_size": p.vm_size,
         "user": user,
     }

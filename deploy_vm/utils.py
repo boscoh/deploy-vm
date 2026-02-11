@@ -32,15 +32,6 @@ def get_ssh_user(provider_name: str) -> str:
     return "ubuntu" if provider_name == "aws" else "root"
 
 
-def get_sudo_prefix(ssh_user: str) -> str:
-    """Get sudo prefix for commands based on SSH user.
-
-    :param ssh_user: SSH username
-    :return: Empty string for root, "sudo " for other users
-    """
-    return "" if ssh_user == "root" else "sudo "
-
-
 def resolve_app_name(
     apps: list[dict],
     app_type: str,

@@ -74,9 +74,13 @@ def create_instance(
     :param provider_name: Cloud provider (default: DEPLOY_VM_PROVIDER or digitalocean)
     :param user: App user for running services
     :param no_setup: Skip firewall, swap, and user setup
-    :param iam_role: AWS only: IAM role name for instance profile (e.g. for Bedrock access)
+    :param iam_role: AWS only: IAM role name for instance profile (default: deploy-vm-bedrock)
     """
     p = get_provider(provider_name, region=region, os_image=os_image, vm_size=vm_size)
+
+    # Default IAM role for AWS instances (for Bedrock access)
+    if p.provider_name == "aws" and iam_role is None:
+        iam_role = "deploy-vm-bedrock"
 
     log(
         f"Creating instance '{name}' on {p.provider_name} in {p.region} ({p.vm_size})..."
@@ -386,7 +390,7 @@ def deploy_nuxt(
 ):
     """Deploy Nuxt app: create instance, setup server, deploy app, configure nginx.
 
-    :param iam_role: AWS only: IAM role name for instance profile
+    :param iam_role: AWS only: IAM role name for instance profile (default: deploy-vm-bedrock)
     """
     if not no_ssl and (not domain or not email):
         error("--domain and --email are required unless --no-ssl is set")
@@ -394,6 +398,7 @@ def deploy_nuxt(
     instance_file = Path(f"{name}.instance.json")
 
     if not instance_file.exists():
+        # IAM role will be set to default in create_instance for AWS
         create_instance(
             name,
             provider_name=provider_name,
@@ -579,7 +584,7 @@ def deploy_fastapi(
 ):
     """Deploy FastAPI app: create instance, setup server, deploy app, configure nginx.
 
-    :param iam_role: AWS only: IAM role name for instance profile (e.g. for Bedrock access)
+    :param iam_role: AWS only: IAM role name for instance profile (default: deploy-vm-bedrock)
     """
     if not no_ssl and (not domain or not email):
         error("--domain and --email are required unless --no-ssl is set")
@@ -587,6 +592,7 @@ def deploy_fastapi(
     instance_file = Path(f"{name}.instance.json")
 
     if not instance_file.exists():
+        # IAM role will be set to default in create_instance for AWS
         create_instance(
             name,
             provider_name=provider_name,

@@ -13,7 +13,7 @@ from .server import (
     ssh_script,
     ssh_write_file,
 )
-from .utils import error, get_ssh_user, get_sudo_prefix, log
+from .utils import error, get_ssh_user, log
 
 
 def compute_hash(source: str, exclude: list[str] | None = None) -> str:
@@ -47,7 +47,7 @@ class BaseApp:
         self.instance = instance_data
         self.ip = instance_data["ip"]
         self.provider_name = provider_name
-        self.ssh_user = get_ssh_user(provider_name)
+        self.ssh_user = "deploy"
 
     def compute_source_hash(
         self, local_path: str, exclude: list[str] | None = None
@@ -207,15 +207,15 @@ class NuxtApp(BaseApp):
         node_script = dedent(f"""
             set -e
             if ! command -v node &> /dev/null; then
-                curl -fsSL https://deb.nodesource.com/setup_{self.node_version}.x | bash -
-                apt-get install -y nodejs
+                curl -fsSL https://deb.nodesource.com/setup_{self.node_version}.x | sudo bash -
+                sudo apt-get install -y nodejs
             fi
             node --version
             if ! command -v pm2 &> /dev/null; then
-                npm install -g pm2
+                sudo npm install -g pm2
             fi
-            mkdir -p {self.app_dir}
-            chown -R {self.user}:{self.user} {self.app_dir}
+            sudo mkdir -p {self.app_dir}
+            sudo chown -R {self.user}:{self.user} {self.app_dir}
         """).strip()
         ssh_script(self.ip, node_script, user=self.ssh_user)
 
@@ -229,7 +229,7 @@ class NuxtApp(BaseApp):
         )
         ssh(
             self.ip,
-            f"chown {self.user}:{self.user} {self.app_dir}/ecosystem.config.cjs",
+            f"sudo chown {self.user}:{self.user} {self.app_dir}/ecosystem.config.cjs",
             user=self.ssh_user,
         )
 
@@ -308,14 +308,14 @@ class NuxtApp(BaseApp):
             # (nginx now serves .output/public directly, so this is rarely needed)
             sed -i 's/dirname(fileURLToPath(import.meta.url))/dirname(fileURLToPath(globalThis._importMeta_.url))/g' \
                 {self.app_dir}/.output/server/chunks/nitro/nitro.mjs 2>/dev/null || true
-            chown -R {self.user}:{self.user} {self.app_dir}
-            pkill -u {self.user} -f pm2 || true
-            pkill -u {self.user} -f "node.*index.mjs" || true
-            rm -rf /home/{self.user}/.pm2 || true
-            rm -f /home/{self.user}/.pm2/*.sock /home/{self.user}/.pm2/pm2.pid 2>/dev/null || true
+            sudo chown -R {self.user}:{self.user} {self.app_dir}
+            sudo pkill -u {self.user} -f pm2 || true
+            sudo pkill -u {self.user} -f "node.*index.mjs" || true
+            sudo rm -rf /home/{self.user}/.pm2 || true
+            sudo rm -f /home/{self.user}/.pm2/*.sock /home/{self.user}/.pm2/pm2.pid 2>/dev/null || true
             sleep 1
             su - {self.user} -c "cd {self.app_dir} && pm2 start ecosystem.config.cjs && pm2 save"
-            pm2 startup systemd -u {self.user} --hp /home/{self.user} 2>/dev/null || true
+            sudo pm2 startup systemd -u {self.user} --hp /home/{self.user} 2>/dev/null || true
         """).strip()
         ssh_script(self.ip, start_script, user=self.ssh_user)
         log("App deployed!")
@@ -381,20 +381,18 @@ class FastAPIApp(BaseApp):
 
         log(f"Deploying FastAPI to {self.ip}...")
 
-        sudo = get_sudo_prefix(self.ssh_user)
-
         log("Installing uv and supervisor...")
         setup_script = dedent(f"""
             set -e
-            {sudo}apt-get update
-            {sudo}apt-get install -y supervisor curl
+            sudo apt-get update
+            sudo apt-get install -y supervisor curl
 
-            {sudo}mkdir -p /home/{self.user}/{self.app_name}
-            {sudo}mkdir -p /var/log/{self.app_name}
-            {sudo}chown -R {self.user}:{self.user} /home/{self.user}/{self.app_name}
-            {sudo}chown -R {self.user}:{self.user} /var/log/{self.app_name}
+            sudo mkdir -p /home/{self.user}/{self.app_name}
+            sudo mkdir -p /var/log/{self.app_name}
+            sudo chown -R {self.user}:{self.user} /home/{self.user}/{self.app_name}
+            sudo chown -R {self.user}:{self.user} /var/log/{self.app_name}
 
-            {sudo}su - {self.user} -c "curl -LsSf https://astral.sh/uv/install.sh | sh"
+            sudo su - {self.user} -c "curl -LsSf https://astral.sh/uv/install.sh | sh"
         """).strip()
         ssh_script(self.ip, setup_script, user=self.ssh_user)
 
@@ -413,7 +411,7 @@ class FastAPIApp(BaseApp):
             log("Source unchanged, restarting app...")
             ssh_script(
                 self.ip,
-                f"{sudo}supervisorctl restart {self.app_name}",
+                f"sudo supervisorctl restart {self.app_name}",
                 user=self.ssh_user,
             )
             log("App restarted")
@@ -432,14 +430,14 @@ class FastAPIApp(BaseApp):
         log("Setting up Python environment...")
         venv_script = dedent(f"""
             set -e
-            {sudo}chown -R {self.user}:{self.user} /home/{self.user}/{self.app_name}
+            sudo chown -R {self.user}:{self.user} /home/{self.user}/{self.app_name}
 
             FROZEN=""
             if [ -f "/home/{self.user}/{self.app_name}/uv.lock" ]; then
                 FROZEN="--frozen"
             fi
 
-            {sudo}su - {self.user} -c "cd /home/{self.user}/{self.app_name} && ~/.local/bin/uv sync $FROZEN"
+            sudo su - {self.user} -c "cd /home/{self.user}/{self.app_name} && ~/.local/bin/uv sync $FROZEN"
         """).strip()
         ssh_script(self.ip, venv_script, user=self.ssh_user)
 
@@ -464,18 +462,13 @@ class FastAPIApp(BaseApp):
             user=self.ssh_user,
         )
 
-        if self.ssh_user == "root":
-            hash_write_cmd = (
-                f'echo "{local_hash}" > /home/{self.user}/{self.app_name}/.source_hash'
-            )
-        else:
-            hash_write_cmd = f'echo "{local_hash}" | {sudo}tee /home/{self.user}/{self.app_name}/.source_hash > /dev/null'
+        hash_write_cmd = f'echo "{local_hash}" | sudo tee /home/{self.user}/{self.app_name}/.source_hash > /dev/null'
 
         ssh_script(
             self.ip,
             f"{hash_write_cmd} && "
-            f"{sudo}chown {self.user}:{self.user} /home/{self.user}/{self.app_name}/.source_hash && "
-            f"{sudo}supervisorctl reread && {sudo}supervisorctl update && {sudo}supervisorctl restart {self.app_name}",
+            f"sudo chown {self.user}:{self.user} /home/{self.user}/{self.app_name}/.source_hash && "
+            f"sudo supervisorctl reread && sudo supervisorctl update && sudo supervisorctl restart {self.app_name}",
             user=self.ssh_user,
         )
         log("FastAPI app deployed!")
@@ -483,15 +476,13 @@ class FastAPIApp(BaseApp):
 
     def restart(self):
         """Restart supervisord app."""
-        sudo = get_sudo_prefix(self.ssh_user)
         log(f"Restarting {self.app_name}...")
-        ssh(self.ip, f"{sudo}supervisorctl restart {self.app_name}", user=self.ssh_user)
+        ssh(self.ip, f"sudo supervisorctl restart {self.app_name}", user=self.ssh_user)
         log("App restarted")
 
     def status(self):
         """Show supervisord status."""
-        sudo = get_sudo_prefix(self.ssh_user)
-        return ssh(self.ip, f"{sudo}supervisorctl status", user=self.ssh_user)
+        return ssh(self.ip, "sudo supervisorctl status", user=self.ssh_user)
 
     def logs(self, lines: int = 50):
         """Show supervisord logs."""

@@ -16,7 +16,7 @@ import dns.resolver
 from fabric import Connection
 from rich import print
 
-from .utils import error, get_sudo_prefix, log, warn
+from .utils import error, log, warn
 
 ProviderName = Literal["digitalocean", "aws"]
 
@@ -27,7 +27,7 @@ DNS_VERIFY_RETRIES = 30
 DNS_VERIFY_DELAY = 10
 
 
-def ssh(ip: str, cmd: str, user: str = "root") -> str:
+def ssh(ip: str, cmd: str, user: str = "deploy") -> str:
     with Connection(ip, user=user, connect_kwargs={"look_for_keys": True}) as c:
         result = c.run(cmd, hide=True, warn=True)
         if result.failed:
@@ -35,7 +35,7 @@ def ssh(ip: str, cmd: str, user: str = "root") -> str:
         return result.stdout
 
 
-def ssh_script(ip: str, script: str, user: str = "root") -> str:
+def ssh_script(ip: str, script: str, user: str = "deploy") -> str:
     with Connection(ip, user=user, connect_kwargs={"look_for_keys": True}) as c:
         escaped = script.replace("'", "'\\''")
         result = c.run(f"bash -c '{escaped}'", hide=True, warn=True)
@@ -44,11 +44,11 @@ def ssh_script(ip: str, script: str, user: str = "root") -> str:
         return result.stdout
 
 
-def ssh_as_user(ip: str, app_user: str, cmd: str, ssh_user: str = "root") -> str:
+def ssh_as_user(ip: str, app_user: str, cmd: str, ssh_user: str = "deploy") -> str:
     return ssh(ip, f'su - {app_user} -c "{cmd}"', user=ssh_user)
 
 
-def ssh_write_file(ip: str, path: str, content: str, user: str = "root"):
+def ssh_write_file(ip: str, path: str, content: str, user: str = "deploy"):
     encoded = base64.b64encode(content.encode()).decode()
     if user != "root" and (path.startswith("/etc/") or path.startswith("/var/")):
         ssh(
@@ -59,7 +59,7 @@ def ssh_write_file(ip: str, path: str, content: str, user: str = "root"):
 
 
 def rsync(
-    local: str, ip: str, remote: str, exclude: list[str] = None, user: str = "root"
+    local: str, ip: str, remote: str, exclude: list[str] = None, user: str = "deploy"
 ):
     ssh_opts = (
         "ssh -o StrictHostKeyChecking=no "
@@ -144,14 +144,13 @@ def _rsync_tar_fallback(
             error(f"scp upload failed: {result.stderr}")
 
         log("Extracting on remote server...")
-        sudo = get_sudo_prefix(user)
         app_user = remote.split("/")[2] if remote.startswith("/home/") else user
         extract_script = f"""
             set -e
-            {sudo}mkdir -p {remote}
-            {sudo}tar -xzf {remote_tar} -C {remote}
-            {sudo}chown -R {app_user}:{app_user} {remote}
-            {sudo}rm -f {remote_tar}
+            sudo mkdir -p {remote}
+            sudo tar -xzf {remote_tar} -C {remote}
+            sudo chown -R {app_user}:{app_user} {remote}
+            sudo rm -f {remote_tar}
         """
         ssh_script(ip, extract_script, user=user)
         log("Transfer complete")
@@ -340,7 +339,7 @@ def compute_hash(source: str, exclude: list[str] | None = None) -> str:
     return hasher.hexdigest()
 
 
-def wait_for_ssh(ip: str, user: str = "root", timeout: int = SSH_TIMEOUT):
+def wait_for_ssh(ip: str, user: str = "deploy", timeout: int = SSH_TIMEOUT):
     log(f"Waiting for SSH on {ip}...")
     start = time.time()
     while time.time() - start < timeout:
@@ -371,7 +370,7 @@ def verify_http(ip: str) -> bool:
             pass
         warn(f"Cannot connect to http://{ip}/ ({i + 1}/{HTTP_VERIFY_RETRIES})")
         time.sleep(HTTP_VERIFY_DELAY)
-    error(f"Cannot connect to server on port 80. Check UFW: ssh root@{ip} 'ufw status'")
+    error(f"Cannot connect to server on port 80. Check UFW: ssh deploy@{ip} 'sudo ufw status'")
 
 
 def setup_server(
@@ -379,28 +378,26 @@ def setup_server(
 ):
     log(f"Setting up server at {ip}...")
 
-    sudo = get_sudo_prefix(ssh_user)
-
     script = dedent(f"""
         set -e
         echo "Waiting for cloud-init..."
-        {sudo}cloud-init status --wait > /dev/null 2>&1 || true
+        sudo cloud-init status --wait > /dev/null 2>&1 || true
 
         echo "Installing packages..."
-        {sudo}apt-get update
-        {sudo}apt-get install -y curl wget git ufw
+        sudo apt-get update
+        sudo apt-get install -y curl wget git ufw
 
         echo "Configuring firewall..."
-        {sudo}ufw allow OpenSSH
-        {sudo}ufw --force enable
+        sudo ufw allow OpenSSH
+        sudo ufw --force enable
 
         echo "Setting up swap..."
         if ! swapon --show | grep -q swapfile; then
-            {sudo}fallocate -l {swap_size} /swapfile
-            {sudo}chmod 600 /swapfile
-            {sudo}mkswap /swapfile
-            {sudo}swapon /swapfile
-            echo '/swapfile none swap sw 0 0' | {sudo}tee -a /etc/fstab
+            sudo fallocate -l {swap_size} /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+            echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
         fi
         echo "Done!"
     """).strip()
@@ -419,15 +416,15 @@ def setup_server(
         if id "{user}" &>/dev/null; then
             echo "User {user} already exists"
         else
-            {sudo}adduser --disabled-password --gecos "" {user}
-            {sudo}usermod -aG sudo {user}
-            echo "{user} ALL=(ALL) NOPASSWD:ALL" | {sudo}tee /etc/sudoers.d/{user}
-            {sudo}chmod 440 /etc/sudoers.d/{user}
-            {sudo}mkdir -p /home/{user}/.ssh
-            {sudo}cp {auth_keys_path} /home/{user}/.ssh/
-            {sudo}chown -R {user}:{user} /home/{user}/.ssh
-            {sudo}chmod 700 /home/{user}/.ssh
-            {sudo}chmod 600 /home/{user}/.ssh/authorized_keys
+            sudo adduser --disabled-password --gecos "" {user}
+            sudo usermod -aG sudo {user}
+            echo "{user} ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/{user}
+            sudo chmod 440 /etc/sudoers.d/{user}
+            sudo mkdir -p /home/{user}/.ssh
+            sudo cp {auth_keys_path} /home/{user}/.ssh/
+            sudo chown -R {user}:{user} /home/{user}/.ssh
+            sudo chmod 700 /home/{user}/.ssh
+            sudo chmod 600 /home/{user}/.ssh/authorized_keys
             echo "User {user} created"
         fi
     """).strip()
@@ -435,10 +432,9 @@ def setup_server(
     log("Server setup complete")
 
 
-def ensure_web_firewall(ip: str, ssh_user: str = "root"):
+def ensure_web_firewall(ip: str, ssh_user: str = "deploy"):
     log("Checking firewall...")
-    sudo = get_sudo_prefix(ssh_user)
-    result = ssh(ip, f"{sudo}ufw status", user=ssh_user)
+    result = ssh(ip, "sudo ufw status", user=ssh_user)
     needs_80 = "80/tcp" not in result
     needs_443 = "443/tcp" not in result
 
@@ -446,10 +442,10 @@ def ensure_web_firewall(ip: str, ssh_user: str = "root"):
         log("Opening web ports in firewall...")
         cmds = []
         if needs_80:
-            cmds.append(f"{sudo}ufw allow 80/tcp")
+            cmds.append("sudo ufw allow 80/tcp")
         if needs_443:
-            cmds.append(f"{sudo}ufw allow 443/tcp")
-        cmds.append(f"{sudo}ufw reload")
+            cmds.append("sudo ufw allow 443/tcp")
+        cmds.append("sudo ufw reload")
         ssh_script(ip, " && ".join(cmds), user=ssh_user)
         log("Firewall updated")
     else:
@@ -535,7 +531,7 @@ def setup_nginx_ip(
     *,
     port: int = 3000,
     static_dir: str | None = None,
-    ssh_user: str = "root",
+    ssh_user: str = "deploy",
 ):
     """Setup nginx for IP-only access (no SSL)."""
     ensure_web_firewall(ip, ssh_user=ssh_user)
@@ -544,17 +540,16 @@ def setup_nginx_ip(
         "_", port, static_dir, listen="80 default_server"
     )
 
-    sudo = get_sudo_prefix(ssh_user)
     log(f"Setting up nginx for IP access on {ip}...")
     ssh_script(
-        ip, f"{sudo}apt-get update && {sudo}apt-get install -y nginx", user=ssh_user
+        ip, "sudo apt-get update && sudo apt-get install -y nginx", user=ssh_user
     )
     ssh_write_file(
         ip, "/etc/nginx/sites-available/default", server_block, user=ssh_user
     )
     ssh_script(
         ip,
-        f"{sudo}ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/ && {sudo}nginx -t && {sudo}systemctl reload nginx",
+        "sudo ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/ && sudo nginx -t && sudo systemctl reload nginx",
         user=ssh_user,
     )
 
@@ -570,7 +565,7 @@ def setup_nginx_ssl(
     port: int = 3000,
     static_dir: str | None = None,
     skip_dns: bool = False,
-    ssh_user: str = "root",
+    ssh_user: str = "deploy",
     provider_name: ProviderName = "digitalocean",
 ):
     """Setup nginx and SSL certificate."""
@@ -582,18 +577,17 @@ def setup_nginx_ssl(
         f"{domain} www.{domain}", port, static_dir
     )
 
-    sudo = get_sudo_prefix(ssh_user)
     log("Setting up nginx...")
     ssh_script(
-        ip, f"{sudo}apt-get update && {sudo}apt-get install -y nginx", user=ssh_user
+        ip, "sudo apt-get update && sudo apt-get install -y nginx", user=ssh_user
     )
     ssh_write_file(
         ip, f"/etc/nginx/sites-available/{domain}", server_block, user=ssh_user
     )
     ssh_script(
         ip,
-        f"{sudo}ln -sf /etc/nginx/sites-available/{domain} /etc/nginx/sites-enabled/ && "
-        f"{sudo}rm -f /etc/nginx/sites-enabled/default && {sudo}nginx -t && {sudo}systemctl reload nginx",
+        f"sudo ln -sf /etc/nginx/sites-available/{domain} /etc/nginx/sites-enabled/ && "
+        f"sudo rm -f /etc/nginx/sites-enabled/default && sudo nginx -t && sudo systemctl reload nginx",
         user=ssh_user,
     )
 
@@ -613,15 +607,15 @@ def setup_nginx_ssl(
     log("Obtaining SSL certificate...")
     ssl_script = dedent(f"""
         set -e
-        {sudo}apt-get install -y certbot python3-certbot-nginx
+        sudo apt-get install -y certbot python3-certbot-nginx
         if [ -d "/etc/letsencrypt/live/{domain}" ]; then
             echo "Certificate exists, renewing if needed..."
-            {sudo}certbot --nginx -d {domain} -d www.{domain} \\
+            sudo certbot --nginx -d {domain} -d www.{domain} \\
                 --non-interactive --agree-tos --email {email} \\
                 --redirect --keep-until-expiring
         else
             echo "Issuing new certificate..."
-            {sudo}certbot --nginx -d {domain} -d www.{domain} \\
+            sudo certbot --nginx -d {domain} -d www.{domain} \\
                 --non-interactive --agree-tos --email {email} --redirect
         fi
     """).strip()
@@ -633,7 +627,7 @@ def verify_instance(
     name: str,
     *,
     domain: str | None = None,
-    ssh_user: str = "root",
+    ssh_user: str = "deploy",
 ):
     """Verify instance health: SSH, firewall, DNS, nginx, app.
 
@@ -657,7 +651,7 @@ def verify_instance(
         issues.append("SSH connection failed")
         return
 
-    ufw_status = ssh(ip, "ufw status", user=ssh_user)
+    ufw_status = ssh(ip, "sudo ufw status", user=ssh_user)
     has_80 = "80/tcp" in ufw_status
     has_443 = "443/tcp" in ufw_status
     if has_80 and has_443:

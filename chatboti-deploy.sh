@@ -14,11 +14,6 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
     set +a
 fi
 
-# Provider configuration (can override with environment variables)
-PROVIDER="${DEPLOY_VM_PROVIDER:-aws}"
-REGION="${AWS_REGION:-ap-southeast-2}"
-VM_SIZE="${VM_SIZE:-t3.small}"
-IAM_ROLE="${IAM_ROLE:-}"
 APP_MODULE="chatboti.server:app"
 APP_NAME="chatboti"
 PORT=8000
@@ -28,29 +23,20 @@ WORKERS=2
 COMMON_ARGS=(
     chatboti
     "$SCRIPT_DIR/../chatboti"
-    --provider-name "$PROVIDER"
-    --region "$REGION"
-    --vm-size "$VM_SIZE"
     --app-module "$APP_MODULE"
     --app-name "$APP_NAME"
     --port "$PORT"
     --workers "$WORKERS"
 )
 
-# Add IAM role if specified (AWS only)
-if [ -n "$IAM_ROLE" ]; then
-    COMMON_ARGS+=(--iam-role "$IAM_ROLE")
-    echo "Using IAM role: $IAM_ROLE"
-fi
-
 if [ "$1" = "--ssl" ]; then
-    echo "Deploying chatboti to $PROVIDER with SSL (chatboti.io)"
+    echo "Deploying chatboti with SSL (chatboti.io)"
     uv run deploy-vm fastapi deploy \
         "${COMMON_ARGS[@]}" \
         --domain chatboti.io \
         --email apposite@gmail.com
 else
-    echo "Deploying chatboti to $PROVIDER (IP-only, no SSL)"
+    echo "Deploying chatboti (IP-only, no SSL)"
     uv run deploy-vm fastapi deploy \
         "${COMMON_ARGS[@]}" \
         --no-ssl

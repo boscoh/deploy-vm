@@ -48,20 +48,6 @@ fastapi_app = cyclopts.App(
     name="fastapi", help="Deploy and manage FastAPI apps", sort_key=4
 )
 
-# Provider-specific default configurations
-PROVIDER_DEFAULTS = {
-    "digitalocean": {
-        "region": "syd1",
-        "vm_size": "s-1vcpu-1gb",
-        "os_image": "ubuntu-24-04-x64",
-    },
-    "aws": {
-        "region": "ap-southeast-2",
-        "vm_size": "t3.micro",
-        "os_image": "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*",
-    },
-}
-
 # Provider-specific valid options for reference
 PROVIDER_OPTIONS = {
     "digitalocean": {
@@ -117,7 +103,6 @@ def run_cmd(*args, check: bool = True) -> str:
 
 
 def run_cmd_json(*args) -> dict | list:
-    """Appends ``-o json`` flag and parses output."""
     output = run_cmd(*args, "-o", "json")
     return json.loads(output) if output else []
 
@@ -144,9 +129,7 @@ def ssh_as_user(ip: str, app_user: str, cmd: str, ssh_user: str = "root") -> str
 
 
 def ssh_write_file(ip: str, path: str, content: str, user: str = "root"):
-    """Uses base64 encoding to avoid heredoc and escaping issues."""
     encoded = base64.b64encode(content.encode()).decode()
-    # Use sudo for writing to system directories when not root
     if user != "root" and (path.startswith("/etc/") or path.startswith("/var/")):
         ssh(ip, f"echo '{encoded}' | base64 -d | sudo tee {path} > /dev/null", user=user)
     else:
@@ -195,14 +178,13 @@ def rsync(
 def _rsync_tar_fallback(
     local: str, ip: str, remote: str, exclude: list[str], user: str, ssh_opts: str
 ):
-    """Fallback to tar+ssh for large transfers when rsync fails."""
     import tempfile
-    
+
     log("Creating tar archive...")
     exclude_args = []
     for ex in exclude or []:
         exclude_args.extend(["--exclude", ex.lstrip("/")])
-    
+
     with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
         tar_cmd = [
             "tar",
@@ -215,11 +197,11 @@ def _rsync_tar_fallback(
         if result.returncode != 0:
             error(f"tar creation failed: {result.stderr}")
         tar_path = tmp.name
-    
+
     try:
         log("Uploading tar archive...")
         remote_tar = f"/tmp/deploy_{int(time.time())}.tar.gz"
-        
+
         scp_cmd = [
             "scp",
             "-o", "StrictHostKeyChecking=no",
@@ -231,11 +213,9 @@ def _rsync_tar_fallback(
         result = subprocess.run(scp_cmd, capture_output=True, text=True)
         if result.returncode != 0:
             error(f"scp upload failed: {result.stderr}")
-        
+
         log("Extracting on remote server...")
-        # Use sudo if not root user
         sudo = "" if user == "root" else "sudo "
-        # Extract the app user from the remote path (e.g., /home/deploy/app -> deploy)
         app_user = remote.split("/")[2] if remote.startswith("/home/") else user
         extract_script = f"""
             set -e
@@ -255,23 +235,18 @@ def load_instance(name: str) -> dict:
     if not path.exists():
         error(f"Instance file not found: {path}")
     data = json.loads(path.read_text())
-    # Migrate old format (app_name/app_type) to new format (apps array)
     if "apps" not in data and "app_name" in data:
         app_data = {"name": data["app_name"], "type": data.get("app_type", "nuxt")}
-        # Preserve port if it was stored elsewhere (unlikely but possible)
         if "port" in data:
             app_data["port"] = data["port"]
         data["apps"] = [app_data]
-        # Clean up old fields after migration
         data.pop("app_name", None)
         data.pop("app_type", None)
-        # Save migrated format
         save_instance(name, data)
     return data
 
 
 def get_instance_apps(instance: dict) -> list[dict]:
-    """Get list of apps from instance data, with backward compatibility."""
     if "apps" in instance:
         return instance["apps"]
     if "app_name" in instance:
@@ -280,33 +255,28 @@ def get_instance_apps(instance: dict) -> list[dict]:
 
 
 def add_app_to_instance(instance: dict, app_name: str, app_type: str, port: int | None = None):
-    """Add or update an app in the instance apps list with smart conflict detection.
-    
+    """Add or update app in instance with conflict detection.
+
     :param instance: Instance data dict
-    :param app_name: App name
     :param app_type: App type (nuxt or fastapi)
     :param port: Port number (optional)
     """
     if "apps" not in instance:
         instance["apps"] = []
-    
-    # Check if app already exists
+
     existing_app = None
     for app in instance["apps"]:
         if app["name"] == app_name:
             existing_app = app
             break
-    
+
     if existing_app:
-        # App exists - update it
         old_type = existing_app.get("type", "unknown")
         old_port = existing_app.get("port")
-        
-        # Warn if type is changing
+
         if old_type != app_type:
             warn(f"App '{app_name}' type changing from {old_type} to {app_type}")
-        
-        # Check for port conflicts with other apps
+
         if port is not None and port != old_port:
             conflicting_apps = [
                 app for app in instance["apps"]
@@ -315,18 +285,15 @@ def add_app_to_instance(instance: dict, app_name: str, app_type: str, port: int 
             if conflicting_apps:
                 conflict_names = ", ".join(app["name"] for app in conflicting_apps)
                 warn(f"Port {port} already in use by: {conflict_names}")
-        
-        # Update app data, preserving any additional metadata
+
         existing_app["type"] = app_type
         if port is not None:
             existing_app["port"] = port
         elif "port" in existing_app and old_port is not None:
-            # Keep existing port if new port not provided
             pass
-        
+
         log(f"Updated app '{app_name}' ({old_type} -> {app_type})")
     else:
-        # New app - check for port conflicts
         if port is not None:
             conflicting_apps = [
                 app for app in instance["apps"]
@@ -335,8 +302,7 @@ def add_app_to_instance(instance: dict, app_name: str, app_type: str, port: int 
             if conflicting_apps:
                 conflict_names = ", ".join(app["name"] for app in conflicting_apps)
                 warn(f"Port {port} already in use by: {conflict_names}")
-        
-        # Add new app
+
         app_data = {"name": app_name, "type": app_type}
         if port is not None:
             app_data["port"] = port
@@ -352,11 +318,10 @@ def is_valid_ip(ip: str) -> bool:
 
 
 def resolve_dns_a(domain: str, nameserver: str = "8.8.8.8") -> str | None:
-    """Resolve domain to IPv4 address using specified nameserver.
-    
-    :param domain: Domain name to resolve
+    """Resolve domain to IPv4 address.
+
     :param nameserver: DNS nameserver IP (default: 8.8.8.8)
-    :return: First A record IP address, or None if resolution fails
+    :return: First A record IP or None
     """
     try:
         resolver = dns.resolver.Resolver()
@@ -368,12 +333,7 @@ def resolve_dns_a(domain: str, nameserver: str = "8.8.8.8") -> str | None:
 
 
 def check_http_status(url: str, timeout: int = 5) -> tuple[int | None, str]:
-    """Check HTTP/HTTPS status of a URL.
-    
-    :param url: URL to check (http:// or https://)
-    :param timeout: Connection timeout in seconds
-    :return: Tuple of (status_code, first_line_of_response) or (None, error_message)
-    """
+    """:return: (status_code, response_text) or (None, error_message)"""
     try:
         req = urllib.request.Request(url, method="HEAD")
         with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -388,7 +348,6 @@ def check_http_status(url: str, timeout: int = 5) -> tuple[int | None, str]:
 
 
 def resolve_ip(target: str) -> str:
-    """:param target: IP string or instance name"""
     if is_valid_ip(target):
         return target
     data = load_instance(target)
@@ -396,10 +355,7 @@ def resolve_ip(target: str) -> str:
 
 
 def resolve_instance(target: str) -> dict:
-    """
-    :param target: IP string or instance name
-    :return: Instance dict with at least ``ip`` key
-    """
+    """:return: Instance dict with at least ``ip`` key"""
     if is_valid_ip(target):
         return {"ip": target}
     return load_instance(target)
@@ -410,7 +366,6 @@ def save_instance(name: str, data: dict):
 
 
 def detect_node_version(source: str) -> int | None:
-    """Checks .nvmrc, .node-version, and package.json engines."""
     source_path = Path(source)
 
     for filename in [".nvmrc", ".node-version"]:
@@ -437,7 +392,6 @@ def detect_node_version(source: str) -> int | None:
 
 
 def compute_hash(source: str, exclude: list[str] | None = None) -> str:
-    """:return: MD5 hex digest of all source files"""
     source_path = Path(source)
     if exclude is None:
         exclude = [".git"]
@@ -452,33 +406,13 @@ def compute_hash(source: str, exclude: list[str] | None = None) -> str:
 
 @lru_cache(maxsize=None)
 def get_aws_config(is_raise_exception: bool = True):
-    """Returns AWS configuration for boto3 client initialization.
+    """Get AWS configuration for boto3 client initialization.
 
-    Searches for AWS profiles and credentials to build a configuration
-    dictionary for boto3 clients. Validates discovered credentials.
+    Searches AWS_PROFILE and AWS_REGION environment variables, validates
+    credentials via STS GetCallerIdentity, and checks token expiration.
 
-    Credential Discovery Process:
-    1. Looks for AWS_PROFILE environment variable
-    2. Searches ~/.aws/credentials file
-    3. Creates boto3 session using discovered profile
-    4. Validates credentials contain required keys
-    5. Tests credential validity with STS GetCallerIdentity
-    6. Checks for token expiration on temporary credentials
-
-    Environment Variables:
-        AWS_PROFILE (str, optional): AWS profile name from ~/.aws/credentials
-        AWS_REGION (str, optional): AWS region for services
-
-    Returns:
-        dict: AWS config for boto3 client initialization:
-            - profile_name (str, optional): AWS profile name
-            - region_name (str): AWS region name
-
-    Examples:
-        >>> aws_config = get_aws_config()
-        >>> ec2_client = boto3.client('ec2', **aws_config)
+    :return: Dict with profile_name and region_name keys
     """
-    # Load environment variables from .env file
     load_dotenv()
 
     aws_config = {}
@@ -545,7 +479,6 @@ def get_aws_config(is_raise_exception: bool = True):
 
 
 def get_local_ssh_key() -> tuple[str, str]:
-    """:return: (key_content, md5_fingerprint)"""
     ssh_dir = Path.home() / ".ssh"
     key_names = ["id_ed25519.pub", "id_rsa.pub", "id_ecdsa.pub"]
 
@@ -581,7 +514,6 @@ def wait_for_ssh(ip: str, user: str = "root", timeout: int = SSH_TIMEOUT):
 
 
 def verify_http(ip: str) -> bool:
-    """Calls ``error()`` on failure, never returns False."""
     log("Verifying HTTP connectivity on port 80...")
     for i in range(HTTP_VERIFY_RETRIES):
         try:
@@ -599,26 +531,40 @@ def verify_http(ip: str) -> bool:
 
 
 class Provider(Protocol):
+    provider_name: ProviderName
+    region: str
+    os_image: str
+    vm_size: str
+
     def validate_auth(self) -> None: ...
+
+    def validate_config(self) -> None: ...
 
     def instance_exists(self, name: str) -> bool: ...
 
-    def create_instance(self, name: str, region: str, vm_size: str) -> dict:
-        """:return: dict with 'id' and 'ip' keys"""
-        ...
+    def create_instance(self, name: str, region: str, vm_size: str) -> dict: ...
 
     def delete_instance(self, instance_id: str) -> None: ...
 
-    def list_instances(self) -> list[dict]:
-        """:return: list of dicts with 'name', 'ip', 'status', 'region' keys"""
-        ...
+    def list_instances(self) -> list[dict]: ...
 
     def setup_dns(self, domain: str, ip: str) -> None: ...
 
+    def cleanup_resources(self, *, dry_run: bool = True) -> None: ...
+
 
 class DigitalOceanProvider:
-    def __init__(self, os_image: str = "ubuntu-24-04-x64"):
-        self.os_image = os_image
+    def __init__(
+        self,
+        os_image: str | None = None,
+        region: str | None = None,
+        vm_size: str | None = None,
+    ):
+        self.provider_name: ProviderName = "digitalocean"
+        self.region = region or "syd1"
+        self.os_image = os_image or "ubuntu-24-04-x64"
+        self.vm_size = vm_size or "s-1vcpu-1gb"
+        self.validate_config()
 
     def validate_auth(self) -> None:
         result = subprocess.run(
@@ -627,12 +573,19 @@ class DigitalOceanProvider:
         if result.returncode != 0:
             error("doctl not authenticated. Run: doctl auth init")
 
+    def validate_config(self) -> None:
+        if self.vm_size.startswith("t3.") or self.vm_size.startswith("t4g.") or self.vm_size.startswith("m5."):
+            error(
+                f"VM size '{self.vm_size}' is an AWS instance type, not DigitalOcean.\n"
+                f"DigitalOcean sizes: s-1vcpu-1gb, s-2vcpu-2gb, s-4vcpu-8gb, etc.\n"
+                f"See PROVIDER_COMPARISON.md for size mappings."
+            )
+
     def instance_exists(self, name: str) -> bool:
         droplets = run_cmd_json("doctl", "compute", "droplet", "list")
         return any(d["name"] == name for d in droplets)
 
     def get_instance_by_name(self, name: str) -> dict | None:
-        """:return: dict with 'id' and 'ip' keys, or None"""
         droplets = run_cmd_json("doctl", "compute", "droplet", "list", name)
         droplet = next((d for d in droplets if d["name"] == name), None)
         if not droplet:
@@ -783,26 +736,28 @@ class DigitalOceanProvider:
                     ip,
                 )
 
+    def cleanup_resources(self, *, dry_run: bool = True) -> None:
+        log("No cleanup operations available for DigitalOcean provider")
+
 
 class AWSProvider:
     def __init__(
         self,
-        os_image: str = "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*",
+        os_image: str | None = None,
         region: str | None = None,
+        vm_size: str | None = None,
     ):
-        """Initialize AWS provider.
-
-        :param os_image: AMI name pattern for Ubuntu (uses latest matching AMI)
-        :param region: AWS region (overrides profile/env var region if specified)
-        """
-        self.os_image = os_image
+        self.provider_name: ProviderName = "aws"
+        self.os_image = os_image or "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"
+        self.vm_size = vm_size or "t3.micro"
         self.aws_config = get_aws_config(is_raise_exception=False)
 
-        # Override region if explicitly provided
         if region:
             self.aws_config["region_name"] = region
 
-        # Validate credentials on initialization
+        region = region or self.aws_config.get("region_name", "ap-southeast-2")
+        self.region = self._validate_and_normalize_region(region)
+
         if not self.aws_config:
             error(
                 "AWS credentials not configured. Please run:\n"
@@ -812,6 +767,8 @@ class AWSProvider:
                 "  export AWS_REGION=ap-southeast-2"
             )
 
+        self.validate_config()
+
     def validate_auth(self) -> None:
         try:
             session = boto3.Session(**self.aws_config)
@@ -819,6 +776,32 @@ class AWSProvider:
             sts.get_caller_identity()
         except Exception as e:
             error(f"AWS authentication failed: {e}")
+
+    def _validate_and_normalize_region(self, region: str) -> str:
+        """Validate and normalize AWS region (converts AZ to region if needed)."""
+        valid_regions = PROVIDER_OPTIONS["aws"]["regions"]
+
+        if region and region[-1].isalpha() and region[:-1] in valid_regions:
+            normalized_region = region[:-1]
+            log(f"Converted availability zone '{region}' to region '{normalized_region}'")
+            return normalized_region
+
+        if region not in valid_regions:
+            error(
+                f"Invalid AWS region: '{region}'\n"
+                f"Valid AWS regions: {', '.join(valid_regions[:6])}, ...\n"
+                f"See PROVIDER_COMPARISON.md for full list."
+            )
+
+        return region
+
+    def validate_config(self) -> None:
+        if self.vm_size.startswith("s-"):
+            error(
+                f"VM size '{self.vm_size}' is a DigitalOcean size, not AWS.\n"
+                f"AWS instance types: t3.micro, t3.small, t3.medium, t3.large, etc.\n"
+                f"See PROVIDER_COMPARISON.md for size mappings."
+            )
 
     def _get_ec2_client(self):
         session = boto3.Session(**self.aws_config)
@@ -829,35 +812,27 @@ class AWSProvider:
         return session.client("route53")
 
     def _validate_vpc(self, ec2, vpc_id: str) -> tuple[bool, str | None]:
-        """Validate VPC has required networking components.
-
-        :return: (is_valid, error_message)
-        """
-        # Check for subnets
+        """:return: (is_valid, error_message)"""
         subnets = ec2.describe_subnets(
             Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]
         )["Subnets"]
         if not subnets:
             return False, "No subnets found in VPC"
 
-        # Check for internet gateway
         igws = ec2.describe_internet_gateways(
             Filters=[{"Name": "attachment.vpc-id", "Values": [vpc_id]}]
         )["InternetGateways"]
         if not igws:
             return False, "No internet gateway attached to VPC"
 
-        # Check for public subnets (with route to IGW)
         has_public_subnet = False
         for subnet in subnets:
-            # Get route table for subnet
             route_tables = ec2.describe_route_tables(
                 Filters=[
                     {"Name": "association.subnet-id", "Values": [subnet["SubnetId"]]}
                 ]
             )["RouteTables"]
 
-            # If no explicit association, check main route table
             if not route_tables:
                 route_tables = ec2.describe_route_tables(
                     Filters=[
@@ -866,7 +841,6 @@ class AWSProvider:
                     ]
                 )["RouteTables"]
 
-            # Check if route table has route to internet gateway
             for rt in route_tables:
                 for route in rt.get("Routes", []):
                     if route.get("GatewayId", "").startswith("igw-"):
@@ -883,7 +857,6 @@ class AWSProvider:
         return True, None
 
     def _get_my_ip(self) -> str:
-        """Get the user's public IP address."""
         try:
             import urllib.request
             response = urllib.request.urlopen('https://api.ipify.org', timeout=5)
@@ -893,7 +866,6 @@ class AWSProvider:
             return None
 
     def _find_ami(self, ec2_client) -> str:
-        """Find latest Ubuntu AMI matching the image pattern."""
         response = ec2_client.describe_images(
             Filters=[
                 {"Name": "name", "Values": [self.os_image]},
@@ -906,7 +878,6 @@ class AWSProvider:
         if not response["Images"]:
             error(f"No AMI found matching pattern: {self.os_image}")
 
-        # Sort by creation date and get the latest
         images = sorted(response["Images"], key=lambda x: x["CreationDate"], reverse=True)
         return images[0]["ImageId"]
 
@@ -921,7 +892,6 @@ class AWSProvider:
         return len(response["Reservations"]) > 0
 
     def get_instance_by_name(self, name: str) -> dict | None:
-        """:return: dict with 'id' and 'ip' keys, or None"""
         ec2 = self._get_ec2_client()
         response = ec2.describe_instances(
             Filters=[
@@ -951,7 +921,6 @@ class AWSProvider:
         ami_id = self._find_ami(ec2)
         log(f"Using AMI: {ami_id}")
 
-        # Get or create SSH key pair
         key_content, fingerprint = get_local_ssh_key()
         key_name = f"deploy-vm-{fingerprint[-8:]}"
 
@@ -966,7 +935,6 @@ class AWSProvider:
             else:
                 raise
 
-        # Get or create security group
         sg_name = "deploy-vm-web"
         try:
             response = ec2.describe_security_groups(
@@ -983,7 +951,6 @@ class AWSProvider:
             if e.response["Error"]["Code"] in ["InvalidGroup.NotFound", "VPCIdNotSpecified"]:
                 log("Creating security group...")
 
-                # Get VPC ID (prefer default, fall back to first available)
                 vpcs = ec2.describe_vpcs()["Vpcs"]
                 if not vpcs:
                     error("No VPC found in this region. Please create a VPC first:\n"
@@ -992,7 +959,6 @@ class AWSProvider:
                 default_vpc = next((v for v in vpcs if v.get("IsDefault")), None)
                 vpc_id = default_vpc["VpcId"] if default_vpc else vpcs[0]["VpcId"]
 
-                # Validate VPC has proper networking
                 is_valid, error_msg = self._validate_vpc(ec2, vpc_id)
                 if not is_valid:
                     error(
@@ -1021,13 +987,11 @@ class AWSProvider:
                 )
                 sg_id = response["GroupId"]
 
-                # Get user's IP for SSH restriction
                 my_ip = self._get_my_ip()
                 ssh_cidr = f"{my_ip}/32" if my_ip else "0.0.0.0/0"
                 if my_ip:
                     log(f"Restricting SSH access to your IP: {my_ip}")
 
-                # Add rules for SSH, HTTP, HTTPS
                 ec2.authorize_security_group_ingress(
                     GroupId=sg_id,
                     IpPermissions=[
@@ -1055,7 +1019,6 @@ class AWSProvider:
             else:
                 raise
 
-        # Create instance
         log(f"Creating EC2 instance '{name}' ({vm_size})...")
         response = ec2.run_instances(
             ImageId=ami_id,
@@ -1083,7 +1046,6 @@ class AWSProvider:
         waiter = ec2.get_waiter("instance_running")
         waiter.wait(InstanceIds=[instance_id])
 
-        # Get public IP
         response = ec2.describe_instances(InstanceIds=[instance_id])
         instance = response["Reservations"][0]["Instances"][0]
         ip = instance.get("PublicIpAddress")
@@ -1130,7 +1092,6 @@ class AWSProvider:
         self.validate_auth()
         route53 = self._get_route53_client()
 
-        # Find hosted zone for domain
         response = route53.list_hosted_zones()
         zone_id = None
         for zone in response["HostedZones"]:
@@ -1143,7 +1104,6 @@ class AWSProvider:
 
         log(f"Updating Route53 DNS records for {domain}...")
 
-        # Update @ and www records
         for record_name in [domain, f"www.{domain}"]:
             change_batch = {
                 "Changes": [
@@ -1166,73 +1126,88 @@ class AWSProvider:
 
         log("DNS records updated")
 
+    def cleanup_resources(self, *, dry_run: bool = True) -> None:
+        """Cleanup orphaned security groups not attached to running instances.
 
-PROVIDERS: dict[str, type[Provider]] = {
-    "digitalocean": DigitalOceanProvider,
-    "aws": AWSProvider,
-}
+        :param dry_run: Show what would be deleted without deleting
+        """
+        self.validate_auth()
+        ec2 = self._get_ec2_client()
+        region = self.aws_config.get("region_name", "ap-southeast-2")
+
+        log(f"Scanning for orphaned security groups in {region}...")
+
+        try:
+            sgs = ec2.describe_security_groups(
+                Filters=[
+                    {"Name": "group-name", "Values": ["deploy-vm-web"]},
+                ]
+            )["SecurityGroups"]
+        except Exception as e:
+            error(f"Failed to list security groups: {e}")
+
+        if not sgs:
+            log("No deploy-vm security groups found")
+            return
+
+        for sg in sgs:
+            sg_id = sg["GroupId"]
+            sg_name = sg["GroupName"]
+
+            try:
+                instances = ec2.describe_instances(
+                    Filters=[
+                        {"Name": "instance.group-id", "Values": [sg_id]},
+                        {"Name": "instance-state-name", "Values": ["running", "pending", "stopping"]}
+                    ]
+                )["Reservations"]
+
+                if instances:
+                    instance_count = sum(len(r["Instances"]) for r in instances)
+                    log(f"Security group {sg_name} ({sg_id}) in use by {instance_count} instance(s)")
+                else:
+                    if dry_run:
+                        log(f"[DRY RUN] Would delete unused security group: {sg_name} ({sg_id})")
+                    else:
+                        ec2.delete_security_group(GroupId=sg_id)
+                        log(f"✓ Deleted security group: {sg_name} ({sg_id})")
+            except ClientError as e:
+                if "DependencyViolation" in str(e):
+                    log(f"Security group {sg_name} ({sg_id}) is still in use")
+                else:
+                    log(f"[WARN] Could not process {sg_name}: {e}")
+
+        if dry_run:
+            log("\nRun with --no-dry-run to actually delete resources")
 
 
-def get_default_provider() -> ProviderName:
-    """Get default provider from environment variable or return 'digitalocean'."""
-    load_dotenv()
-    provider = os.getenv("DEPLOY_VM_PROVIDER", "digitalocean")
-    if provider not in ["digitalocean", "aws"]:
-        log(f"[WARN] Invalid DEPLOY_VM_PROVIDER '{provider}', using 'digitalocean'")
-        return "digitalocean"
-    return provider
+def get_provider(
+    provider_name: ProviderName | None = None,
+    *,
+    region: str | None = None,
+    os_image: str | None = None,
+    vm_size: str | None = None,
+) -> Provider:
+    if provider_name is None:
+        load_dotenv()
+        provider_name = os.getenv("DEPLOY_VM_PROVIDER", "digitalocean")
+        if provider_name not in ["digitalocean", "aws"]:
+            log(f"[WARN] Invalid DEPLOY_VM_PROVIDER '{provider_name}', using 'digitalocean'")
+            provider_name = "digitalocean"
+    elif provider_name not in ["digitalocean", "aws"]:
+        error(f"Unknown provider: {provider_name}. Available: digitalocean, aws")
 
-
-def validate_and_normalize_region(provider: ProviderName, region: str) -> str:
-    """Validate and normalize the region for the provider.
-
-    Automatically converts availability zones to regions (us-east-1a -> us-east-1).
-
-    :param provider: Cloud provider
-    :param region: Region or availability zone
-    :return: Normalized region
-    :raises SystemExit: If region is invalid
-    """
-    if provider == "aws":
-        valid_regions = PROVIDER_OPTIONS["aws"]["regions"]
-
-        # Check if it looks like an availability zone (ends with letter)
-        if region and region[-1].isalpha() and region[:-1] in valid_regions:
-            # User provided an AZ, extract the region
-            normalized_region = region[:-1]
-            log(f"Converted availability zone '{region}' to region '{normalized_region}'")
-            return normalized_region
-
-        if region not in valid_regions:
-            error(
-                f"Invalid AWS region: '{region}'\n"
-                f"Valid AWS regions: {', '.join(valid_regions[:6])}, ...\n"
-                f"See PROVIDER_COMPARISON.md for full list."
-            )
-
-    return region
-
-
-def get_provider(name: ProviderName, **kwargs) -> Provider:
-    if name not in PROVIDERS:
-        error(f"Unknown provider: {name}. Available: {', '.join(PROVIDERS.keys())}")
-
-    # Filter kwargs based on provider - only AWS accepts region parameter
-    if name == "digitalocean":
-        # DigitalOcean only accepts os_image
-        provider_kwargs = {k: v for k, v in kwargs.items() if k in ["os_image"]}
+    if provider_name == "digitalocean":
+        return DigitalOceanProvider(os_image=os_image, region=region, vm_size=vm_size)
     else:  # aws
-        # AWS accepts both os_image and region
-        provider_kwargs = kwargs
-
-    return PROVIDERS[name](**provider_kwargs)
+        return AWSProvider(os_image=os_image, region=region, vm_size=vm_size)
 
 
 @instance_app.command(name="create")
 def create_instance(
     name: str,
     *,
-    provider: ProviderName | None = None,
+    provider_name: ProviderName | None = None,
     region: str | None = None,
     vm_size: str | None = None,
     os_image: str | None = None,
@@ -1240,86 +1215,25 @@ def create_instance(
     swap_size: str = "4G",
     no_setup: bool = False,
 ):
-    """Create a new cloud instance and set it up.
+    """Create cloud instance and set it up.
 
-    :param name: Name for the instance
-    :param provider: Cloud provider (default: DEPLOY_VM_PROVIDER env var or digitalocean)
-    :param region: Region
-        - DigitalOcean: syd1, sgp1, nyc1, sfo3, lon1, fra1 (default: syd1)
-        - AWS: ap-southeast-2, us-east-1, us-west-2, eu-west-1 (default: ap-southeast-2)
-    :param vm_size: VM size
-        - DigitalOcean: s-1vcpu-1gb, s-2vcpu-2gb, s-4vcpu-8gb (default: s-1vcpu-1gb)
-        - AWS: t3.micro, t3.small, t3.medium, t3.large (default: t3.micro)
-    :param os_image: OS image
-        - DigitalOcean: ubuntu-24-04-x64, ubuntu-22-04-x64 (default: ubuntu-24-04-x64)
-        - AWS: AMI pattern (default: Ubuntu 22.04 LTS, auto-selected)
-    :param user: App user to create for running services
-    :param swap_size: Swap file size (e.g., 4G, 2G)
-    :param no_setup: Skip server setup (firewall, swap, user creation)
+    :param provider_name: Cloud provider (default: DEPLOY_VM_PROVIDER or digitalocean)
+    :param user: App user for running services
+    :param no_setup: Skip firewall, swap, and user setup
     """
-    # Set provider from environment variable if not specified
-    if provider is None:
-        provider = get_default_provider()
+    p = get_provider(provider_name, region=region, os_image=os_image, vm_size=vm_size)
 
-    # Set provider-specific defaults
-    defaults = PROVIDER_DEFAULTS[provider]
-    region = region or defaults["region"]
-    vm_size = vm_size or defaults["vm_size"]
-    os_image = os_image or defaults["os_image"]
-
-    # Validate and normalize region (converts AZ to region if needed)
-    region = validate_and_normalize_region(provider, region)
-
-    # Validate provider-specific parameters
-    if provider == "aws":
-        # Check for common DigitalOcean parameters used with AWS
-        if region in ["syd1", "sgp1", "nyc1", "nyc3", "sfo3", "lon1", "fra1", "ams3", "tor1", "blr1"]:
-            error(
-                f"Region '{region}' is a DigitalOcean region, not AWS.\n"
-                f"AWS regions: ap-southeast-2, us-east-1, us-west-2, eu-west-1, etc.\n"
-                f"See PROVIDER_COMPARISON.md for region mappings."
-            )
-        if vm_size.startswith("s-"):
-            error(
-                f"VM size '{vm_size}' is a DigitalOcean size, not AWS.\n"
-                f"AWS instance types: t3.micro, t3.small, t3.medium, t3.large, etc.\n"
-                f"See PROVIDER_COMPARISON.md for size mappings."
-            )
-        if os_image in ["ubuntu-24-04-x64", "ubuntu-22-04-x64", "ubuntu-20-04-x64"]:
-            log(
-                f"[WARN] OS image '{os_image}' looks like a DigitalOcean slug.\n"
-                f"AWS uses AMI patterns. Using default Ubuntu 22.04 LTS AMI instead."
-            )
-            os_image = "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"
-
-    elif provider == "digitalocean":
-        # Check for common AWS parameters used with DigitalOcean
-        if region.startswith("us-") or region.startswith("eu-") or region.startswith("ap-"):
-            error(
-                f"Region '{region}' looks like an AWS region, not DigitalOcean.\n"
-                f"DigitalOcean regions: syd1, nyc1, sfo3, lon1, fra1, sgp1, etc.\n"
-                f"See PROVIDER_COMPARISON.md for region mappings."
-            )
-        if vm_size.startswith("t3.") or vm_size.startswith("t4g.") or vm_size.startswith("m5."):
-            error(
-                f"VM size '{vm_size}' is an AWS instance type, not DigitalOcean.\n"
-                f"DigitalOcean sizes: s-1vcpu-1gb, s-2vcpu-2gb, s-4vcpu-8gb, etc.\n"
-                f"See PROVIDER_COMPARISON.md for size mappings."
-            )
-
-    log(f"Creating instance '{name}' on {provider} in {region} ({vm_size})...")
-
-    p = get_provider(provider, os_image=os_image, region=region)
-    result = p.create_instance(name, region, vm_size)
+    log(f"Creating instance '{name}' on {p.provider_name} in {p.region} ({p.vm_size})...")
+    result = p.create_instance(name, p.region, p.vm_size)
 
     save_instance(
         name,
         {
             "id": result["id"],
             "ip": result["ip"],
-            "provider": provider,
-            "region": region,
-            "vm_size": vm_size,
+            "provider": p.provider_name,
+            "region": p.region,
+            "vm_size": p.vm_size,
             "user": user,
         },
     )
@@ -1327,8 +1241,7 @@ def create_instance(
     log("Instance ready!")
     print(f"  IP: {result['ip']}")
 
-    # AWS uses 'ubuntu' as default user, DigitalOcean uses 'root'
-    ssh_user = "ubuntu" if provider == "aws" else "root"
+    ssh_user = "ubuntu" if p.provider_name == "aws" else "root"
     print(f"  SSH: ssh {ssh_user}@{result['ip']}")
 
     if not no_setup:
@@ -1338,36 +1251,27 @@ def create_instance(
 
 @instance_app.command(name="delete")
 def delete_instance(
-    name: str, *, provider: ProviderName | None = None, force: bool = False
+    name: str, *, provider_name: ProviderName | None = None, force: bool = False
 ):
-    """Delete an instance.
-
-    :param name: Instance name (looks up from provider if no .instance.json)
-    :param provider: Cloud provider (used if no .instance.json)
-    :param force: Skip confirmation
-    """
-    # Set provider from environment variable if not specified
-    if provider is None:
-        provider = get_default_provider()
-
+    """Delete instance."""
     instance_file = Path(f"{name}.instance.json")
-    p = get_provider(provider)
+    p = get_provider(provider_name)
 
     if instance_file.exists():
         data = json.loads(instance_file.read_text())
-        provider = data.get("provider", provider)
-        p = get_provider(provider)
+        provider_name = data.get("provider", provider_name)
+        p = get_provider(provider_name)
     else:
-        log(f"No {name}.instance.json found, looking up from {provider}...")
+        log(f"No {name}.instance.json found, looking up from {p.provider_name}...")
         p.validate_auth()
         lookup = p.get_instance_by_name(name)
         if not lookup:
-            error(f"Instance '{name}' not found in {provider}")
-        data = {"id": lookup["id"], "ip": lookup["ip"], "provider": provider}
+            error(f"Instance '{name}' not found in {p.provider_name}")
+        data = {"id": lookup["id"], "ip": lookup["ip"], "provider": p.provider_name}
 
     print("[yellow]Instance to delete:[/yellow]")
     print(f"  Name: {name}")
-    print(f"  Provider: {data.get('provider', provider)}")
+    print(f"  Provider: {data.get('provider', p.provider_name)}")
     print(f"  ID: {data['id']}")
     print(f"  IP: {data['ip']}")
 
@@ -1387,48 +1291,29 @@ def delete_instance(
 @instance_app.command(name="list")
 def list_instances(
     *,
-    provider: ProviderName | None = None,
+    provider_name: ProviderName | None = None,
     region: str | None = None,
 ):
-    """List all instances.
+    p = get_provider(provider_name, region=region)
 
-    :param provider: Cloud provider
-    :param region: Region to list instances from (default: provider's default region)
-    """
-    if provider is None:
-        provider = get_default_provider()
-
-    # Use provider's default region if not specified
-    if region is None:
-        region = PROVIDER_DEFAULTS[provider]["region"]
-
-    # Validate and normalize region (converts AZ to region if needed)
-    region = validate_and_normalize_region(provider, region)
-
-    # Show which region is being queried for AWS
-    if provider == "aws":
-        log(f"Listing instances in {region}...")
-
-    p = get_provider(provider, region=region)
+    if p.provider_name == "aws":
+        log(f"Listing instances in {p.region}...")
     instances = p.list_instances()
 
     if not instances:
-        log(f"No instances found in {region}")
+        log(f"No instances found in {p.region}")
         return
 
-    # Calculate column widths for alignment
     max_name = max(len(i['name']) for i in instances)
     max_ip = max(len(i['ip']) for i in instances)
     max_region = max(len(i['region']) for i in instances)
 
-    # Print header
     name_header = "NAME".ljust(max_name)
     ip_header = "IP ADDRESS".ljust(max_ip)
     region_header = "REGION".ljust(max_region)
     print(f"  {name_header}  {ip_header}  {region_header}  STATUS")
     print(f"  {'-' * max_name}  {'-' * max_ip}  {'-' * max_region}  {'---'}")
 
-    # Print instances
     for i in instances:
         name = i['name'].ljust(max_name)
         ip = i['ip'].ljust(max_ip)
@@ -1436,81 +1321,36 @@ def list_instances(
         print(f"  {name}  {ip}  {region}  {i['status']}")
 
 
+@instance_app.command(name="apps")
+def list_instance_apps(target: str):
+    instance = resolve_instance(target)
+    apps = get_instance_apps(instance)
+
+    if not apps:
+        print(f"No apps tracked for instance '{target}'")
+        return
+
+    print(f"Apps on {target} ({instance['ip']}):")
+    for app in apps:
+        port_info = f" (port {app.get('port', '?')})" if app.get('port') else ""
+        print(f"  - {app['name']}: {app['type']}{port_info}")
+
+
 @instance_app.command(name="cleanup")
 def cleanup_resources(
     *,
-    provider: ProviderName | None = None,
+    provider_name: ProviderName | None = None,
     region: str | None = None,
     dry_run: bool = True,
 ):
-    """Cleanup orphaned security groups and resources.
+    """Cleanup orphaned security groups not attached to running instances.
 
-    Removes security groups that are not attached to any running instances.
-
-    :param provider: Cloud provider
+    :param provider_name: Cloud provider
     :param region: AWS region (default: ap-southeast-2)
     :param dry_run: Show what would be deleted without deleting (default: true)
     """
-    if provider is None:
-        provider = get_default_provider()
-
-    if provider != "aws":
-        log("Cleanup command only supported for AWS provider")
-        return
-
-    # Set default region for AWS
-    if region is None:
-        region = PROVIDER_DEFAULTS["aws"]["region"]
-
-    p = get_provider(provider, region=region)
-    ec2 = p._get_ec2_client()
-
-    log(f"Scanning for orphaned security groups in {region}...")
-
-    # Find security groups managed by this tool
-    try:
-        sgs = ec2.describe_security_groups(
-            Filters=[
-                {"Name": "group-name", "Values": ["deploy-vm-web"]},
-            ]
-        )["SecurityGroups"]
-    except Exception as e:
-        error(f"Failed to list security groups: {e}")
-
-    if not sgs:
-        log("No deploy-vm security groups found")
-        return
-
-    for sg in sgs:
-        sg_id = sg["GroupId"]
-        sg_name = sg["GroupName"]
-
-        # Check if security group is in use by any running instances
-        try:
-            instances = ec2.describe_instances(
-                Filters=[
-                    {"Name": "instance.group-id", "Values": [sg_id]},
-                    {"Name": "instance-state-name", "Values": ["running", "pending", "stopping"]}
-                ]
-            )["Reservations"]
-
-            if instances:
-                instance_count = sum(len(r["Instances"]) for r in instances)
-                log(f"Security group {sg_name} ({sg_id}) in use by {instance_count} instance(s)")
-            else:
-                if dry_run:
-                    log(f"[DRY RUN] Would delete unused security group: {sg_name} ({sg_id})")
-                else:
-                    ec2.delete_security_group(GroupId=sg_id)
-                    log(f"✓ Deleted security group: {sg_name} ({sg_id})")
-        except ClientError as e:
-            if "DependencyViolation" in str(e):
-                log(f"Security group {sg_name} ({sg_id}) is still in use")
-            else:
-                log(f"[WARN] Could not process {sg_name}: {e}")
-
-    if dry_run:
-        log("\nRun with --no-dry-run to actually delete resources")
+    p = get_provider(provider_name, region=region)
+    p.cleanup_resources(dry_run=dry_run)
 
 
 @instance_app.command(name="verify")
@@ -1519,18 +1359,17 @@ def verify_instance(
     *,
     domain: str | None = None,
     ssh_user: str = "root",
-    provider: ProviderName = "digitalocean",
+    provider_name: ProviderName = "digitalocean",
 ):
     """Verify instance health: SSH, firewall, DNS, nginx, app.
 
     :param name: Instance name
     :param domain: Domain to check DNS for
     :param ssh_user: SSH user for connection
-    :param provider: Cloud provider for DNS checks
+    :param provider_name: Cloud provider for DNS checks
     """
     data = load_instance(name)
     ip = data["ip"]
-    user = data.get("user", "deploy")
 
     print(f"Verifying {name} ({ip})...")
     print("-" * 40)
@@ -1545,7 +1384,6 @@ def verify_instance(
         issues.append("SSH connection failed")
         return
 
-    # Firewall check
     ufw_status = ssh(ip, "ufw status", user=ssh_user)
     has_80 = "80/tcp" in ufw_status
     has_443 = "443/tcp" in ufw_status
@@ -1560,7 +1398,6 @@ def verify_instance(
         print(f"[FAIL] Firewall: ports {', '.join(missing)} not open")
         issues.append(f"Firewall missing ports: {', '.join(missing)}")
 
-    # Nginx check
     nginx_status = ssh(ip, "systemctl is-active nginx 2>/dev/null || echo 'inactive'", user=ssh_user).strip()
     if nginx_status == "active":
         print("[OK] Nginx: running")
@@ -1568,7 +1405,6 @@ def verify_instance(
         print(f"[FAIL] Nginx: {nginx_status}")
         issues.append("Nginx not running")
 
-    # DNS check (if domain provided)
     if domain:
         dns_ip = resolve_dns_a(domain)
         if dns_ip == ip:
@@ -1580,7 +1416,6 @@ def verify_instance(
             print(f"[FAIL] DNS: {domain} -> no A record found")
             issues.append("DNS check failed")
 
-    # HTTP check
     status_code, response_line = check_http_status(f"http://{ip}")
     if status_code and status_code in [200, 301, 302]:
         print("[OK] HTTP: responding")
@@ -1590,7 +1425,6 @@ def verify_instance(
         print(f"[FAIL] HTTP: {response_line}")
         issues.append("HTTP not responding")
 
-    # HTTPS check (if domain provided)
     if domain:
         status_code, response_line = check_http_status(f"https://{domain}")
         if status_code == 200:
@@ -1615,7 +1449,6 @@ def setup_server(
 ):
     log(f"Setting up server at {ip}...")
 
-    # Use sudo if not running as root
     sudo = "" if ssh_user == "root" else "sudo "
 
     script = dedent(f"""
@@ -1645,7 +1478,6 @@ def setup_server(
 
     log(f"Creating user: {user}")
 
-    # For AWS (ubuntu user), need to reference the ubuntu user's authorized_keys
     auth_keys_path = "~/.ssh/authorized_keys" if ssh_user == "root" else "/home/ubuntu/.ssh/authorized_keys"
 
     user_script = dedent(f"""
@@ -1675,7 +1507,6 @@ def generate_pm2_ecosystem_config(
     cwd: str,
     port: int,
 ) -> str:
-    """Loads .env vars into PM2 config (required for Nuxt runtime config)."""
     return dedent(f"""
         const fs = require('fs');
         const path = require('path');
@@ -1740,9 +1571,8 @@ def ensure_web_firewall(ip: str, ssh_user: str = "root"):
 
 
 def ensure_dns_matches(
-    domain: str, expected_ip: str, provider: ProviderName = "digitalocean"
+    domain: str, expected_ip: str, provider_name: ProviderName = "digitalocean"
 ) -> bool:
-    """:return: True if DNS was updated, False if already correct"""
     current_ip = resolve_dns_a(domain) or ""
 
     if current_ip == expected_ip:
@@ -1750,7 +1580,7 @@ def ensure_dns_matches(
 
     warn(f"DNS mismatch: {domain} points to {current_ip or 'nothing'}, expected {expected_ip}")
     log("Updating DNS...")
-    p = get_provider(provider)
+    p = get_provider(provider_name)
     p.setup_dns(domain, expected_ip)
     log("DNS updated (may take a few minutes to propagate)")
     return True
@@ -1762,14 +1592,9 @@ def generate_nginx_server_block(
     static_dir: str | None = None,
     listen: str = "80",
 ) -> str:
-    """
-    When static_dir is provided, nginx serves static files directly and only
-    proxies to the backend for non-static requests.
+    """Generate nginx server block.
 
-    :param server_name: domain or "_" for default
-    :param port: backend port to proxy to
-    :param static_dir: directory for static files (e.g., /home/user/nuxt/.output/public)
-    :param listen: listen directive (default "80", SSL configs use "443 ssl")
+    :param static_dir: If provided, nginx serves static files and proxies non-static requests
     """
     proxy_block = dedent("""
         proxy_pass http://127.0.0.1:{port};
@@ -1819,13 +1644,7 @@ def setup_nginx_ip(
     static_dir: str | None = None,
     ssh_user: str = "root",
 ):
-    """Setup nginx for IP-only access (no SSL).
-
-    :param target: Server IP address or instance name (loads from <name>.instance.json)
-    :param port: Backend port
-    :param static_dir: Optional directory for static files (nginx serves directly)
-    :param ssh_user: SSH user for connection
-    """
+    """Setup nginx for IP-only access (no SSL)."""
     ip = resolve_ip(target)
 
     ensure_web_firewall(ip, ssh_user=ssh_user)
@@ -1856,24 +1675,14 @@ def setup_nginx_ssl(
     static_dir: str | None = None,
     skip_dns: bool = False,
     ssh_user: str = "root",
-    provider: ProviderName = "digitalocean",
+    provider_name: ProviderName = "digitalocean",
 ):
-    """Setup nginx and SSL certificate.
-
-    :param target: Server IP address or instance name (loads from <name>.instance.json)
-    :param domain: Domain name
-    :param email: Email for Let's Encrypt
-    :param port: Backend port
-    :param static_dir: Optional directory for static files (nginx serves directly)
-    :param skip_dns: Skip DNS setup
-    :param ssh_user: SSH user for connection
-    :param provider: Cloud provider for DNS
-    """
+    """Setup nginx and SSL certificate."""
     ip = resolve_ip(target)
 
     ensure_web_firewall(ip, ssh_user=ssh_user)
     if not skip_dns:
-        ensure_dns_matches(domain, ip, provider=provider)
+        ensure_dns_matches(domain, ip, provider_name=provider_name)
 
     server_block = generate_nginx_server_block(f"{domain} www.{domain}", port, static_dir)
 
@@ -1933,17 +1742,10 @@ def sync_nuxt(
     force: bool = False,
     node_version: int = 20,
 ):
-    """Sync Nuxt app to an existing server.
+    """Sync Nuxt app to server.
 
-    :param target: Server IP address or instance name (loads from <name>.instance.json)
-    :param source: Path to Nuxt source directory
-    :param user: App user (reads from instance.json if not specified)
-    :param ssh_user: SSH user for connection (default: root)
-    :param port: App port
-    :param app_name: PM2 app name (default: nuxt)
     :param local_build: Build locally instead of on server
     :param force: Force rebuild even if source unchanged
-    :param node_version: Node.js major version to install (e.g., 20, 22)
     """
     instance = resolve_instance(target)
     ip = instance["ip"]
@@ -2083,13 +1885,6 @@ def sync_nuxt(
 
 @nuxt_app.command(name="restart")
 def restart_pm2(target: str, *, user: str | None = None, ssh_user: str = "root", app_name: str | None = None):
-    """Restart the Nuxt app via PM2.
-
-    :param target: Server IP address or instance name (loads from <name>.instance.json)
-    :param user: App user (reads from instance.json if not specified)
-    :param ssh_user: SSH user for connection
-    :param app_name: PM2 app name (required if multiple apps exist on instance)
-    """
     instance = resolve_instance(target)
     ip = instance["ip"]
     user = user or instance.get("user", "deploy")
@@ -2112,35 +1907,10 @@ def restart_pm2(target: str, *, user: str | None = None, ssh_user: str = "root",
 
 @nuxt_app.command(name="status")
 def show_pm2_status(target: str, *, user: str | None = None, ssh_user: str = "root"):
-    """Check PM2 process status.
-
-    :param target: Server IP address or instance name (loads from <name>.instance.json)
-    :param user: App user (reads from instance.json if not specified)
-    :param ssh_user: SSH user for connection
-    """
     instance = resolve_instance(target)
     ip = instance["ip"]
     user = user or instance.get("user", "deploy")
     print(ssh_as_user(ip, user, "pm2 list", ssh_user=ssh_user))
-
-
-@instance_app.command(name="apps")
-def list_instance_apps(target: str):
-    """List all apps deployed on an instance.
-
-    :param target: Instance name (loads from <name>.instance.json)
-    """
-    instance = resolve_instance(target)
-    apps = get_instance_apps(instance)
-    
-    if not apps:
-        print(f"No apps tracked for instance '{target}'")
-        return
-    
-    print(f"Apps on {target} ({instance['ip']}):")
-    for app in apps:
-        port_info = f" (port {app.get('port', '?')})" if app.get('port') else ""
-        print(f"  - {app['name']}: {app['type']}{port_info}")
 
 
 @nuxt_app.command(name="logs")
@@ -2187,7 +1957,7 @@ def deploy_nuxt(
     ssh_user: str = "root",
     port: int = 3000,
     app_name: str = "nuxt",
-    provider: ProviderName = "digitalocean",
+    provider_name: ProviderName = "digitalocean",
     region: str = "syd1",
     vm_size: str = "s-1vcpu-1gb",
     os_image: str = "ubuntu-24-04-x64",
@@ -2196,25 +1966,7 @@ def deploy_nuxt(
     local_build: bool = True,
     no_ssl: bool = False,
 ):
-    """Deploy Nuxt app from scratch: create instance, setup server, deploy app, configure nginx.
-
-    :param name: Project/instance name
-    :param source: Path to Nuxt source
-    :param domain: Domain name (required unless --no-ssl)
-    :param email: Email for Let's Encrypt (required unless --no-ssl)
-    :param user: App user (runs PM2)
-    :param ssh_user: SSH user for connection
-    :param port: App port for nginx reverse proxy
-    :param app_name: PM2 app name (default: nuxt)
-    :param provider: Cloud provider
-    :param region: Instance region
-    :param vm_size: Droplet size (s-1vcpu-1gb, s-1vcpu-2gb, s-2vcpu-2gb, s-4vcpu-8gb)
-    :param os_image: OS image (ubuntu-24-04-x64, ubuntu-22-04-x64)
-    :param swap_size: Swap file size (e.g., 4G, 2G)
-    :param node_version: Node.js major version (e.g., 20, 22)
-    :param local_build: Build locally
-    :param no_ssl: Skip SSL setup, use IP-only access
-    """
+    """Deploy Nuxt app: create instance, setup server, deploy app, configure nginx."""
     if not no_ssl and (not domain or not email):
         error("--domain and --email are required unless --no-ssl is set")
 
@@ -2223,7 +1975,7 @@ def deploy_nuxt(
     if not instance_file.exists():
         create_instance(
             name,
-            provider=provider,
+            provider_name=provider_name,
             region=region,
             vm_size=vm_size,
             os_image=os_image,
@@ -2272,7 +2024,6 @@ def deploy_nuxt(
             provider=provider,
         )
 
-    # Verify deployment
     log("Verifying deployment...")
     verify_script = f"curl -sI http://localhost:{port} | head -1"
     result = ssh(ip, verify_script, user=ssh_user)
@@ -2299,24 +2050,14 @@ def sync_fastapi(
     workers: int = 2,
     force: bool = False,
 ) -> bool:
-    """Sync FastAPI app to an existing server using supervisord.
+    """Sync FastAPI app to server using supervisord.
 
-    :param target: Server IP address or instance name (loads from <name>.instance.json)
-    :param source: Path to FastAPI source directory (must have pyproject.toml)
-    :param user: App user (reads from instance.json if not specified)
-    :param ssh_user: SSH user for connection (auto-detected from provider if not specified)
-    :param port: App port
-    :param app_name: Name for the supervisor process
-    :param app_module: Uvicorn app module (e.g., "main:app" or "myapp.server:app")
-    :param workers: Number of uvicorn workers
-    :param force: Force rebuild even if source unchanged
-    :return: True if full sync, False if source unchanged (restart only)
+    :return: True if full sync, False if source unchanged
     """
     instance = resolve_instance(target)
     ip = instance["ip"]
     user = user or instance.get("user", "deploy")
 
-    # Auto-detect ssh_user from provider if not specified
     if ssh_user is None:
         provider = instance.get("provider", "digitalocean")
         ssh_user = "ubuntu" if provider == "aws" else "root"
@@ -2335,7 +2076,6 @@ def sync_fastapi(
 
     log(f"Deploying FastAPI to {ip}...")
 
-    # Use sudo if not running as root
     sudo = "" if ssh_user == "root" else "sudo "
 
     log("Installing uv and supervisor...")
@@ -2404,7 +2144,6 @@ def sync_fastapi(
     """).strip()
     ssh_write_file(ip, f"/etc/supervisor/conf.d/{app_name}.conf", supervisor_config, user=ssh_user)
 
-    # Write hash file and restart supervisor
     if ssh_user == "root":
         hash_write_cmd = f'echo "{local_hash}" > /home/{user}/{app_name}/.source_hash'
     else:
@@ -2425,16 +2164,9 @@ def sync_fastapi(
 def restart_supervisor(
     target: str, *, app_name: str | None = None, ssh_user: str | None = None
 ):
-    """Restart a FastAPI app via supervisord.
-
-    :param target: Server IP address or instance name (loads from <name>.instance.json)
-    :param app_name: Name of the supervisor process (required if multiple apps exist on instance)
-    :param ssh_user: SSH user for connection (auto-detected from provider if not specified)
-    """
     instance = resolve_instance(target)
     ip = instance["ip"]
 
-    # Auto-detect ssh_user from provider if not specified
     if ssh_user is None:
         provider = instance.get("provider", "digitalocean")
         ssh_user = "ubuntu" if provider == "aws" else "root"
@@ -2458,15 +2190,9 @@ def restart_supervisor(
 
 @fastapi_app.command(name="status")
 def show_supervisor_status(target: str, *, ssh_user: str | None = None):
-    """Check supervisord process status.
-
-    :param target: Server IP address or instance name (loads from <name>.instance.json)
-    :param ssh_user: SSH user for connection (auto-detected from provider if not specified)
-    """
     instance = resolve_instance(target)
     ip = instance["ip"]
 
-    # Auto-detect ssh_user from provider if not specified
     if ssh_user is None:
         provider = instance.get("provider", "digitalocean")
         ssh_user = "ubuntu" if provider == "aws" else "root"
@@ -2479,17 +2205,9 @@ def show_supervisor_status(target: str, *, ssh_user: str | None = None):
 def show_supervisor_logs(
     target: str, *, app_name: str | None = None, ssh_user: str | None = None, lines: int = 50
 ):
-    """View supervisord logs.
-
-    :param target: Server IP address or instance name (loads from <name>.instance.json)
-    :param app_name: Name of the supervisor process (required if multiple apps exist on instance)
-    :param ssh_user: SSH user for connection (auto-detected from provider if not specified)
-    :param lines: Number of lines to show
-    """
     instance = resolve_instance(target)
     ip = instance["ip"]
 
-    # Auto-detect ssh_user from provider if not specified
     if ssh_user is None:
         provider = instance.get("provider", "digitalocean")
         ssh_user = "ubuntu" if provider == "aws" else "root"
@@ -2528,50 +2246,23 @@ def deploy_fastapi(
     app_module: str = "app:app",
     workers: int = 2,
     static_subdir: str | None = None,
-    provider: ProviderName | None = None,
+    provider_name: ProviderName | None = None,
     region: str | None = None,
     vm_size: str | None = None,
     os_image: str | None = None,
     swap_size: str = "4G",
     no_ssl: bool = False,
 ):
-    """Deploy FastAPI app from scratch: create instance, setup server, deploy app, configure nginx.
-
-    :param name: Project/instance name
-    :param source: Path to FastAPI source (must have pyproject.toml with requires-python)
-    :param domain: Domain name (required unless --no-ssl)
-    :param email: Email for Let's Encrypt (required unless --no-ssl)
-    :param user: App user (runs supervisord process)
-    :param ssh_user: SSH user for connection
-    :param port: App port for nginx reverse proxy
-    :param app_name: Name for the supervisor process
-    :param app_module: Uvicorn app module (e.g., "main:app" or "myapp.server:app")
-    :param workers: Number of uvicorn workers
-    :param static_subdir: Optional subdirectory for static files (e.g., "static" -> /home/user/app/static)
-    :param provider: Cloud provider
-    :param region: Instance region
-    :param vm_size: Droplet size (s-1vcpu-1gb, s-1vcpu-2gb, s-2vcpu-2gb, s-4vcpu-8gb)
-    :param os_image: OS image (ubuntu-24-04-x64, ubuntu-22-04-x64)
-    :param swap_size: Swap file size (e.g., 4G, 2G)
-    :param no_ssl: Skip SSL setup, use IP-only access
-    """
+    """Deploy FastAPI app: create instance, setup server, deploy app, configure nginx."""
     if not no_ssl and (not domain or not email):
         error("--domain and --email are required unless --no-ssl is set")
 
     instance_file = Path(f"{name}.instance.json")
 
-    # Use provider defaults if not specified
-    if provider is None:
-        provider = get_default_provider()
-    defaults = PROVIDER_DEFAULTS[provider]
-    region = region or defaults["region"]
-    vm_size = vm_size or defaults["vm_size"]
-    os_image = os_image or defaults["os_image"]
-
     if not instance_file.exists():
         create_instance(
             name,
-            provider=provider,
+            provider_name=provider_name,
             region=region,
             vm_size=vm_size,
             os_image=os_image,
@@ -2589,7 +2280,6 @@ def deploy_fastapi(
 
     ip = data["ip"]
 
-    # Auto-detect ssh_user from provider if not specified
     if ssh_user is None:
         instance_provider = data.get("provider", "digitalocean")
         ssh_user = "ubuntu" if instance_provider == "aws" else "root"
@@ -2625,7 +2315,6 @@ def deploy_fastapi(
             provider=provider,
         )
 
-    # Verify deployment
     log("Verifying deployment...")
     verify_script = f"curl -sI http://localhost:{port} | head -1"
     result = ssh(ip, verify_script, user=ssh_user)

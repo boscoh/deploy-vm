@@ -649,32 +649,69 @@ def get_nameservers(
     *,
     provider_name: ProviderName | None = None,
 ):
-    """Get nameservers for a domain.
+    """Get nameservers for a domain (creates hosted zone if needed for AWS).
+
+    For AWS: Creates a Route53 hosted zone if it doesn't exist, then returns nameservers.
+    Caches result in <domain>.nameservers.json for faster subsequent lookups.
+    For DigitalOcean: Returns standard DigitalOcean nameservers.
 
     :param domain: Domain name (e.g., example.com)
     :param provider_name: Cloud provider (aws or digitalocean)
     """
+    import json
+    from pathlib import Path
+
     p = get_provider(provider_name)
 
     if p.provider_name == "aws":
-        p.validate_auth()
-        route53 = p._get_route53_client()
+        import time
 
-        response = route53.list_hosted_zones()
-        zone_id = None
-        zone_name = None
+        ns_file = Path(f"{domain}.nameservers.json")
 
-        for zone in response["HostedZones"]:
-            if zone["Name"] == f"{domain}." or zone["Name"] == domain:
-                zone_id = zone["Id"]
-                zone_name = zone["Name"]
-                break
+        # Check if we have cached nameservers
+        if ns_file.exists():
+            log(f"Loading nameservers from {ns_file}")
+            data = json.loads(ns_file.read_text())
+            zone_id = data["zone_id"]
+            zone_name = data["zone_name"]
+            nameservers = data["nameservers"]
+        else:
+            p.validate_auth()
+            route53 = p._get_route53_client()
 
-        if not zone_id:
-            error(f"No Route53 hosted zone found for domain: {domain}")
+            response = route53.list_hosted_zones()
+            zone_id = None
+            zone_name = None
 
-        zone_response = route53.get_hosted_zone(Id=zone_id)
-        nameservers = zone_response["DelegationSet"]["NameServers"]
+            for zone in response["HostedZones"]:
+                if zone["Name"] == f"{domain}." or zone["Name"] == domain:
+                    zone_id = zone["Id"]
+                    zone_name = zone["Name"]
+                    break
+
+            if not zone_id:
+                log(f"Creating Route53 hosted zone for {domain}...")
+                create_response = route53.create_hosted_zone(
+                    Name=domain,
+                    CallerReference=str(int(time.time() * 1000)),
+                )
+                zone_id = create_response["HostedZone"]["Id"]
+                zone_name = create_response["HostedZone"]["Name"]
+                log(f"Created hosted zone: {zone_id}")
+
+            zone_response = route53.get_hosted_zone(Id=zone_id)
+            nameservers = zone_response["DelegationSet"]["NameServers"]
+
+            # Save nameservers to file
+            data = {
+                "domain": domain,
+                "provider": "aws",
+                "zone_id": zone_id,
+                "zone_name": zone_name,
+                "nameservers": nameservers,
+            }
+            ns_file.write_text(json.dumps(data, indent=2))
+            log(f"Saved nameservers to {ns_file}")
 
         print(f"Route53 Hosted Zone: {zone_name}")
         print(f"Zone ID: {zone_id}")

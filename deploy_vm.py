@@ -95,6 +95,15 @@ def error(msg: str):
     sys.exit(1)
 
 
+def get_ssh_user(provider_name: str) -> str:
+    """Get default SSH user for cloud provider.
+
+    :param provider_name: Cloud provider (aws or digitalocean)
+    :return: SSH username (ubuntu for AWS, root for DigitalOcean)
+    """
+    return "ubuntu" if provider_name == "aws" else "root"
+
+
 def run_cmd(*args, check: bool = True) -> str:
     result = subprocess.run(args, capture_output=True, text=True)
     if check and result.returncode != 0:
@@ -1241,7 +1250,7 @@ def create_instance(
     log("Instance ready!")
     print(f"  IP: {result['ip']}")
 
-    ssh_user = "ubuntu" if p.provider_name == "aws" else "root"
+    ssh_user = get_ssh_user(p.provider_name)
     print(f"  SSH: ssh {ssh_user}@{result['ip']}")
 
     if not no_setup:
@@ -2008,7 +2017,7 @@ def deploy_nuxt(
 
     ensure_web_firewall(ip, ssh_user=ssh_user)
     if not no_ssl:
-        ensure_dns_matches(domain, ip, provider=provider)
+        ensure_dns_matches(domain, ip, provider=data["provider"])
 
     nuxt_static_dir = f"/home/{user}/{app_name}/.output/public"
     if no_ssl:
@@ -2021,7 +2030,7 @@ def deploy_nuxt(
             port=port,
             static_dir=nuxt_static_dir,
             ssh_user=ssh_user,
-            provider=provider,
+            provider=data["provider"],
         )
 
     log("Verifying deployment...")
@@ -2060,7 +2069,7 @@ def sync_fastapi(
 
     if ssh_user is None:
         provider = instance.get("provider", "digitalocean")
-        ssh_user = "ubuntu" if provider == "aws" else "root"
+        ssh_user = get_ssh_user(provider)
     
     if not is_valid_ip(target):
         add_app_to_instance(instance, app_name, "fastapi", port)
@@ -2169,7 +2178,7 @@ def restart_supervisor(
 
     if ssh_user is None:
         provider = instance.get("provider", "digitalocean")
-        ssh_user = "ubuntu" if provider == "aws" else "root"
+        ssh_user = get_ssh_user(provider)
 
     apps = [app for app in get_instance_apps(instance) if app["type"] == "fastapi"]
 
@@ -2195,7 +2204,7 @@ def show_supervisor_status(target: str, *, ssh_user: str | None = None):
 
     if ssh_user is None:
         provider = instance.get("provider", "digitalocean")
-        ssh_user = "ubuntu" if provider == "aws" else "root"
+        ssh_user = get_ssh_user(provider)
 
     sudo = "" if ssh_user == "root" else "sudo "
     print(ssh(ip, f"{sudo}supervisorctl status", user=ssh_user))
@@ -2210,7 +2219,7 @@ def show_supervisor_logs(
 
     if ssh_user is None:
         provider = instance.get("provider", "digitalocean")
-        ssh_user = "ubuntu" if provider == "aws" else "root"
+        ssh_user = get_ssh_user(provider)
 
     apps = [app for app in get_instance_apps(instance) if app["type"] == "fastapi"]
 
@@ -2282,7 +2291,7 @@ def deploy_fastapi(
 
     if ssh_user is None:
         instance_provider = data.get("provider", "digitalocean")
-        ssh_user = "ubuntu" if instance_provider == "aws" else "root"
+        ssh_user = get_ssh_user(instance_provider)
 
     log(f"Deploying {name} to {ip}")
     print("=" * 50)
@@ -2299,7 +2308,7 @@ def deploy_fastapi(
 
     ensure_web_firewall(ip, ssh_user=ssh_user)
     if not no_ssl:
-        ensure_dns_matches(domain, ip, provider=provider)
+        ensure_dns_matches(domain, ip, provider=data["provider"])
 
     static_dir = f"/home/{user}/{app_name}/{static_subdir}" if static_subdir else None
     if no_ssl:
@@ -2312,7 +2321,7 @@ def deploy_fastapi(
             port=port,
             static_dir=static_dir,
             ssh_user=ssh_user,
-            provider=provider,
+            provider=data["provider"],
         )
 
     log("Verifying deployment...")

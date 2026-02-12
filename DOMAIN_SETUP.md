@@ -1,259 +1,467 @@
-# Domain Setup Specification
+# Domain Setup Guide
 
-## Overview
+Complete guide for adding custom domains with SSL/HTTPS to your deploy-vm instances.
 
-This document specifies how to add domain name support to AWS (and DigitalOcean) instances in the deploy-vm system. Domain support enables HTTPS/SSL certificates via Let's Encrypt and automatic DNS record management.
+## Table of Contents
 
-## Current Implementation
+1. [Quick Start](#quick-start)
+2. [Prerequisites](#prerequisites)
+3. [Usage Patterns](#usage-patterns)
+4. [Verification](#verification)
+5. [Troubleshooting](#troubleshooting)
+6. [Technical Reference](#technical-reference)
+7. [Future Enhancements](#future-enhancements)
 
-Domain support is **already implemented** for both providers through the following features:
+---
 
-1. **Automatic DNS Management**: Updates DNS A records when deploying with `--domain` flag
-2. **SSL Certificate Issuance**: Uses certbot to obtain Let's Encrypt certificates
-3. **DNS Verification**: Waits for DNS propagation before issuing certificates
-4. **Nginx Configuration**: Generates SSL-enabled nginx server blocks
+## Quick Start
 
-## Architecture
+Deploy with a custom domain in three steps:
 
-### Components
+```bash
+# 1. Configure nameservers at your domain registrar (one-time setup)
+#    AWS: Use Route53 nameservers from `deploy-vm dns nameservers`
+#    DigitalOcean: Use ns1/2/3.digitalocean.com
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     User Command                             │
-│  deploy-vm [nuxt|fastapi] deploy --domain example.com       │
-└─────────────────────────────────────────────────────────────┘
-                           ↓
-┌─────────────────────────────────────────────────────────────┐
-│                  setup_nginx_ssl()                           │
-│  server.py:565-630                                           │
-└─────────────────────────────────────────────────────────────┘
-                           ↓
-                ┌──────────┴──────────┐
-                ↓                      ↓
-┌──────────────────────────┐  ┌──────────────────────────┐
-│  ensure_dns_matches()    │  │  verify_http()           │
-│  server.py:459-477       │  │  server.py:360-375       │
-└──────────────────────────┘  └──────────────────────────┘
-                ↓
-┌──────────────────────────────────────────────────────────────┐
-│              Provider.setup_dns()                             │
-│  DigitalOcean: providers.py:269-313                          │
-│  AWS:          providers.py:779-816                          │
-└──────────────────────────────────────────────────────────────┘
-                ↓
-        ┌───────┴────────┐
-        ↓                 ↓
-┌──────────────┐  ┌──────────────────┐
-│ DigitalOcean │  │  AWS Route53     │
-│     DNS      │  │                  │
-└──────────────┘  └──────────────────┘
+# 2. Wait 24-48 hours for DNS propagation
+
+# 3. Deploy with domain
+uv run deploy-vm fastapi deploy my-api /path/to/app \
+  --domain example.com \
+  --email admin@example.com \
+  --provider aws \
+  --region us-east-1
 ```
 
-### Data Flow
+**What you get:**
+- ✅ Automatic DNS A record creation (example.com + www.example.com)
+- ✅ Free SSL certificate from Let's Encrypt (auto-renews)
+- ✅ HTTPS with HTTP→HTTPS redirect
+- ✅ Nginx configured and ready
 
-1. **User initiates deployment** with `--domain example.com --email user@example.com`
-2. **DNS validation** checks if domain points to correct IP
-3. **DNS update** (if needed) via provider API:
-   - **AWS**: Updates Route53 A records for `example.com` and `www.example.com`
-   - **DigitalOcean**: Updates DigitalOcean DNS for `example.com` and `www.example.com`
-4. **DNS propagation wait** polls DNS (up to 5 minutes)
-5. **Firewall configuration** opens ports 80 and 443
-6. **Nginx setup** creates server blocks
-7. **SSL certificate** obtained via certbot
-8. **Verification** checks HTTP/HTTPS connectivity
+---
 
 ## Prerequisites
 
-### AWS Route53 Setup
+### AWS Route53
 
-**CRITICAL**: Domain must be configured in Route53 **before** deployment:
+**One-time setup** (must be done before deployment):
 
-1. **Create Hosted Zone**:
-   ```bash
-   aws route53 create-hosted-zone \
-     --name example.com \
-     --caller-reference $(date +%s)
-   ```
+<details>
+<summary>📋 Step-by-step AWS setup</summary>
 
-2. **Get Nameservers**:
-   ```bash
-   # Using deploy-vm (recommended)
-   uv run deploy-vm dns nameservers example.com --provider-name aws
+**Step 1: Create Route53 Hosted Zone**
+```bash
+aws route53 create-hosted-zone \
+  --name example.com \
+  --caller-reference $(date +%s)
+```
 
-   # Or using AWS CLI
-   aws route53 get-hosted-zone --id <zone-id>
-   ```
+**Step 2: Get Route53 Nameservers**
+```bash
+# Recommended: Use deploy-vm
+uv run deploy-vm dns nameservers example.com --provider-name aws
 
-3. **Update Domain Registrar**: Point nameservers to AWS Route53
-   - Use nameservers from step 2
-   - Update at your domain registrar (GoDaddy, Namecheap, etc.)
-   - Example nameservers:
-     ```
-     ns-1234.awsdns-12.org
-     ns-5678.awsdns-34.com
-     ns-9012.awsdns-56.net
-     ns-3456.awsdns-78.co.uk
-     ```
+# Alternative: Use AWS CLI
+aws route53 get-hosted-zone --id <zone-id>
+```
 
-4. **Verify Propagation** (24-48 hours):
-   ```bash
-   dig example.com NS
-   # Should show Route53 nameservers
-   ```
+You'll see nameservers like:
+```
+ns-1234.awsdns-12.org
+ns-5678.awsdns-34.com
+ns-9012.awsdns-56.net
+ns-3456.awsdns-78.co.uk
+```
 
-### DigitalOcean DNS Setup
+**Step 3: Update Domain Registrar**
 
-1. **Configure Nameservers** at domain registrar:
-   ```
-   ns1.digitalocean.com
-   ns2.digitalocean.com
-   ns3.digitalocean.com
-   ```
+Go to your domain registrar (GoDaddy, Namecheap, etc.) and replace their nameservers with the Route53 nameservers from Step 2.
 
-2. **Verify** (24-48 hours):
-   ```bash
-   dig example.com NS
-   # Should show DigitalOcean nameservers
-   ```
+**Step 4: Verify Propagation** (24-48 hours later)
+```bash
+dig example.com NS
+# Should show Route53 nameservers
+```
+
+</details>
+
+### DigitalOcean DNS
+
+**One-time setup:**
+
+<details>
+<summary>📋 Step-by-step DigitalOcean setup</summary>
+
+**Step 1: Update Domain Registrar**
+
+Configure these nameservers at your domain registrar:
+```
+ns1.digitalocean.com
+ns2.digitalocean.com
+ns3.digitalocean.com
+```
+
+**Step 2: Verify Propagation** (24-48 hours later)
+```bash
+dig example.com NS
+# Should show DigitalOcean nameservers
+```
+
+**Step 3: Check doctl Authentication**
+```bash
+doctl auth validate
+# Should show "Authenticated successfully"
+```
+
+</details>
+
+### Both Providers
+
+Ensure you have:
+- ✅ SSH key: `ls ~/.ssh/id_*.pub` shows a public key
+- ✅ Provider credentials configured (AWS CLI or doctl)
+- ✅ Domain nameservers updated at registrar
+- ✅ 24-48 hours passed for DNS propagation
+
+---
 
 ## Usage Patterns
 
 ### Pattern 1: New Deployment with Domain (Recommended)
 
-Deploy a new app with domain from the start:
+Deploy a new application with domain from the start.
 
+**AWS Example:**
 ```bash
-# AWS
-uv run deploy-vm fastapi deploy my-server /path/to/app \
+uv run deploy-vm fastapi deploy my-api /path/to/app \
   --provider aws \
   --region us-east-1 \
   --vm-size t3.small \
-  --domain example.com \
-  --email admin@example.com
-
-# DigitalOcean
-uv run deploy-vm nuxt deploy my-server /path/to/nuxt \
-  --domain example.com \
+  --domain api.example.com \
   --email admin@example.com
 ```
 
-**What happens**:
-1. Creates instance (if doesn't exist)
-2. Deploys application
-3. Updates DNS records automatically
-4. Configures nginx with SSL
-5. Obtains Let's Encrypt certificate
+**DigitalOcean Example:**
+```bash
+uv run deploy-vm nuxt deploy my-site /path/to/nuxt \
+  --domain mysite.com \
+  --email admin@mysite.com \
+  --region syd1 \
+  --vm-size s-1vcpu-2gb
+```
+
+**What happens:**
+1. Creates cloud instance (if doesn't exist)
+2. Deploys application code
+3. Updates DNS records: `example.com` and `www.example.com` → instance IP
+4. Waits for DNS propagation (up to 5 minutes)
+5. Configures nginx with SSL
+6. Obtains Let's Encrypt certificate
+7. Sets up HTTP→HTTPS redirect
+
+**Access your app:**
+```bash
+curl https://example.com
+# or
+open https://example.com
+```
+
+---
 
 ### Pattern 2: Add Domain to Existing Instance
 
-Add domain to instance that was deployed with `--no-ssl`:
+Add a domain to an instance that was initially deployed without one.
 
+**Example:**
 ```bash
-# 1. Update DNS manually or via provider
-uv run deploy-vm nginx ssl my-server example.com admin@example.com \
+# Instance was created with --no-ssl, now add domain
+uv run deploy-vm nginx ssl my-api example.com admin@example.com \
   --port 8000 \
-  --skip-dns  # If DNS already configured elsewhere
+  --provider-name aws
 ```
 
-**What happens**:
-1. Configures nginx for the domain
+**Note:** Must specify `--provider-name` so deploy-vm knows which DNS provider to use.
+
+**What happens:**
+1. Updates DNS records (example.com → instance IP)
 2. Waits for DNS propagation
-3. Obtains SSL certificate
+3. Configures nginx for the domain
+4. Obtains SSL certificate
+
+---
 
 ### Pattern 3: IP-Only Deployment (No Domain)
 
-Deploy without domain (HTTP only, no SSL):
+Deploy without a custom domain (HTTP only, no SSL).
 
+**Example:**
 ```bash
 uv run deploy-vm fastapi deploy my-server /path/to/app \
   --provider aws \
   --no-ssl
 ```
 
-Access via: `http://<ip-address>`
+**Access:** `http://<instance-ip>:8000`
 
-### Pattern 4: Change Domain for Existing Instance
+**When to use:**
+- Testing/development
+- Internal services
+- When domain not ready yet
 
-Update DNS records to point to a different instance:
+**Add domain later:** Use Pattern 2 above
 
+---
+
+### Pattern 4: Check Domain Nameservers
+
+Verify domain configuration before deployment.
+
+**AWS:**
 ```bash
-# Method 1: Use nginx ssl command
-uv run deploy-vm nginx ssl my-server newdomain.com admin@example.com
-
-# Method 2: Manually update DNS (not implemented yet)
-# Would require: deploy-vm dns update newdomain.com <instance-name>
+uv run deploy-vm dns nameservers example.com --provider-name aws
 ```
 
-### Pattern 5: Check Domain Nameservers
-
-Get nameservers for your domain before deployment:
-
+**DigitalOcean:**
 ```bash
-# AWS - Shows Route53 nameservers
-uv run deploy-vm dns nameservers example.com --provider-name aws
-
-# DigitalOcean - Shows DigitalOcean nameservers
 uv run deploy-vm dns nameservers example.com --provider-name digitalocean
 ```
 
-**What happens**:
-1. For AWS: Queries Route53 for hosted zone nameservers
-2. For DigitalOcean: Shows static DigitalOcean nameservers
-3. Displays setup instructions for domain registrar
+**Output shows:**
+- Nameservers you need to configure at registrar
+- Setup instructions
+- Current DNS status
 
-**Use case**: Verify domain is configured correctly before attempting deployment.
+**Use case:** Confirm domain is configured correctly before attempting deployment.
 
-## Implementation Details
+---
+
+## Verification
+
+### Automated Verification
+
+Run comprehensive health check:
+
+```bash
+uv run deploy-vm instance verify my-server --domain example.com
+```
+
+**Checks:**
+- ✅ SSH connection
+- ✅ Firewall (ports 80, 443 open)
+- ✅ Nginx running
+- ✅ DNS resolution (example.com → instance IP)
+- ✅ HTTP responding
+- ✅ HTTPS responding
+- ✅ SSL certificate valid
+
+### Manual Verification
+
+**Check DNS resolution:**
+```bash
+dig example.com A
+# Should return your instance IP
+```
+
+**Check HTTP:**
+```bash
+curl -I http://example.com
+# Should show 301/302 redirect to HTTPS
+```
+
+**Check HTTPS:**
+```bash
+curl https://example.com
+# Should return your app response
+```
+
+**Check SSL certificate:**
+```bash
+openssl s_client -connect example.com:443 -servername example.com
+# Shows Let's Encrypt certificate info
+```
+
+**Check nginx configuration:**
+```bash
+ssh root@<instance-ip> 'nginx -T'
+# Shows complete nginx config
+```
+
+---
+
+## Troubleshooting
+
+### Issue: "No Route53 hosted zone found"
+
+**Symptoms:** AWS deployment fails immediately
+
+**Diagnosis:**
+```bash
+aws route53 list-hosted-zones
+```
+
+**Solution:**
+1. Create hosted zone:
+   ```bash
+   aws route53 create-hosted-zone \
+     --name example.com \
+     --caller-reference $(date +%s)
+   ```
+2. Update domain registrar with Route53 nameservers
+3. Wait 24-48 hours for propagation
+4. Retry deployment
+
+---
+
+### Issue: "DNS verification timeout"
+
+**Symptoms:** Deployment hangs for 5 minutes, then fails with DNS timeout
+
+**Diagnosis:**
+```bash
+# Check nameservers
+dig example.com NS
+
+# Check A record
+dig example.com A
+```
+
+**Solutions:**
+
+| Finding | Action |
+|---------|--------|
+| Wrong NS records | Update nameservers at registrar, wait 24-48h |
+| No A record | Check if DNS update succeeded, check provider credentials |
+| A record wrong IP | Manually update DNS or re-run deployment |
+| DNS not propagated yet | Use `--skip-dns` flag and configure DNS manually |
+
+**Workaround - skip DNS management:**
+```bash
+uv run deploy-vm nginx ssl my-server example.com admin@example.com \
+  --skip-dns
+```
+Then manually configure DNS at your provider.
+
+---
+
+### Issue: certbot fails
+
+**Symptoms:** SSL certificate issuance fails with "Connection refused" or "Failed authorization"
+
+**Diagnosis:**
+```bash
+# Check nginx status
+ssh root@<instance-ip> 'systemctl status nginx'
+
+# Check firewall
+ssh root@<instance-ip> 'ufw status'
+
+# Check HTTP accessibility
+curl http://example.com
+```
+
+**Solutions:**
+
+| Problem | Fix |
+|---------|-----|
+| Nginx not running | `ssh root@<ip> 'systemctl start nginx'` |
+| Firewall blocking | `ssh root@<ip> 'ufw allow 80/tcp && ufw allow 443/tcp'` |
+| DNS not resolving | Wait longer for DNS propagation |
+| Port 80 not accessible | Check cloud provider security group/firewall rules |
+
+**Manual retry:**
+```bash
+ssh root@<instance-ip>
+certbot --nginx -d example.com -d www.example.com \
+  --email admin@example.com \
+  --agree-tos --redirect --force-renewal
+```
+
+---
+
+### Issue: HTTPS shows wrong certificate or SSL error
+
+**Symptoms:** Browser shows SSL error or certificate for wrong domain
+
+**Diagnosis:**
+```bash
+openssl s_client -connect example.com:443 -servername example.com | grep subject
+```
+
+**Solution:** Force certificate re-issuance:
+```bash
+ssh root@<instance-ip>
+certbot --nginx -d example.com -d www.example.com \
+  --email admin@example.com \
+  --agree-tos --redirect --force-renewal
+```
+
+---
+
+### Issue: Security group DependencyViolation
+
+**Symptoms:** Cannot delete security group, "DependencyViolation" error
+
+**Cause:** Security group still attached to terminating instance
+
+**Solution:**
+```bash
+# Wait for instance to fully terminate
+aws ec2 describe-instances --instance-ids <instance-id>
+# Status should be "terminated"
+
+# Then delete security group
+aws ec2 delete-security-group --group-id <sg-id>
+```
+
+---
+
+## Technical Reference
+
+### Architecture Flow
+
+```
+User Command (--domain --email)
+         ↓
+    Deploys App
+         ↓
+    setup_nginx_ssl()
+         ↓
+    ┌────┴────┐
+    ↓         ↓
+ensure_dns() verify_http()
+    ↓
+Provider.setup_dns()
+    ↓
+  ┌─┴─┐
+  ↓   ↓
+Route53  DO DNS
+    ↓
+Wait for DNS (5 min max)
+    ↓
+certbot --nginx
+    ↓
+SSL Certificate ✅
+```
 
 ### DNS Management
 
-#### AWS Provider (providers.py:779-816)
+**AWS Route53** (`AWSProvider.setup_dns()`):
+- Creates/updates Route53 A records using UPSERT
+- Sets TTL to 300 seconds
+- Updates both apex (`example.com`) and www subdomain
+- Requires: Route53 hosted zone exists, AWS credentials valid
 
-```python
-def setup_dns(self, domain: str, ip: str) -> None:
-    """Update Route53 A records for domain and www subdomain.
-
-    Prerequisites:
-    - Route53 hosted zone must exist for domain
-    - AWS credentials configured
-
-    Creates/updates:
-    - example.com -> <ip>
-    - www.example.com -> <ip>
-    """
-```
-
-**Key behaviors**:
-- Uses `UPSERT` action (creates or updates)
-- Sets TTL to 300 seconds (5 minutes)
-- Fails if no hosted zone found
-- Updates both apex and www subdomain
-
-#### DigitalOcean Provider (providers.py:269-313)
-
-```python
-def setup_dns(self, domain: str, ip: str) -> None:
-    """Update DigitalOcean DNS A records.
-
-    Prerequisites:
-    - Domain nameservers pointed to DigitalOcean
-    - doctl authenticated
-
-    Creates/updates:
-    - @ (apex) -> <ip>
-    - www -> <ip>
-    """
-```
-
-**Key behaviors**:
+**DigitalOcean** (`DigitalOceanProvider.setup_dns()`):
+- Creates/updates DigitalOcean DNS records via doctl
 - Creates domain if doesn't exist
-- Uses `doctl compute domain records` API
-- Updates existing records or creates new ones
+- Updates both `@` (apex) and `www` records
+- Requires: Nameservers pointed to DO, doctl authenticated
 
-### SSL Certificate Issuance (server.py:613-629)
+### SSL Certificate Issuance
 
+**certbot command:**
 ```bash
-# certbot command generated by setup_nginx_ssl
 certbot --nginx \
   -d example.com \
   -d www.example.com \
@@ -261,60 +469,41 @@ certbot --nginx \
   --agree-tos \
   --email admin@example.com \
   --redirect \
-  --keep-until-expiring  # Renews only if needed
+  --keep-until-expiring
 ```
 
-**Requirements**:
-1. Nginx configured and running
-2. Ports 80 and 443 open in firewall
-3. DNS resolving to instance IP
-4. HTTP accessible (certbot uses HTTP-01 challenge)
+**Requirements:**
+- Nginx installed and running
+- Ports 80 and 443 open in firewall
+- DNS resolving to instance IP
+- HTTP accessible (uses HTTP-01 challenge)
 
-### DNS Verification (server.py:600-609)
+**Certificate details:**
+- Provider: Let's Encrypt
+- Validity: 90 days
+- Auto-renewal: Yes (via certbot cron job)
+- TLS versions: 1.2+
+- Cipher suites: Strong ciphers (certbot defaults)
 
+### DNS Verification Logic
+
+**Retry parameters:**
 ```python
-# Retry logic
 DNS_VERIFY_RETRIES = 30  # attempts
 DNS_VERIFY_DELAY = 10    # seconds between attempts
-# Total wait time: 5 minutes
-
-for i in range(DNS_VERIFY_RETRIES):
-    resolved = resolve_dns_a(domain)
-    if resolved == ip:
-        break
-    time.sleep(DNS_VERIFY_DELAY)
+# Total wait: up to 5 minutes
 ```
 
-## Error Handling
+**Process:**
+1. Resolve domain A record
+2. Compare with instance IP
+3. If match: proceed
+4. If no match: wait 10 seconds, retry
+5. After 30 attempts: fail with timeout
 
-### Common Failures
+### Instance State Tracking
 
-| Error | Cause | Solution |
-|-------|-------|----------|
-| `No Route53 hosted zone found` | Hosted zone not created | Create hosted zone in Route53 |
-| `DNS verification timeout` | Nameservers not updated | Wait 24-48h, verify NS records |
-| `certbot failed` | HTTP not accessible | Check firewall, nginx status |
-| `Security group DependencyViolation` | SG still attached | Wait for instance termination |
-
-### Verification Command
-
-```bash
-# Check all components
-uv run deploy-vm instance verify my-server --domain example.com
-
-# Output shows:
-# [OK/FAIL] SSH connection
-# [OK/FAIL] Firewall (ports 80, 443)
-# [OK/FAIL] Nginx running
-# [OK/FAIL] DNS: example.com -> <ip>
-# [OK/FAIL] HTTP responding
-# [OK/FAIL] HTTPS responding
-```
-
-## Instance State Tracking
-
-### instance.json Schema
-
+**instance.json schema:**
 ```json
 {
   "id": "i-0abc123def456",
@@ -322,9 +511,9 @@ uv run deploy-vm instance verify my-server --domain example.com
   "provider": "aws",
   "region": "ap-southeast-2",
   "vm_size": "t3.small",
-  "os_image": "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*",
+  "os_image": "ami-0abc123def456",
   "user": "deploy",
-  "domain": "example.com",  // Added when domain configured
+  "iam_role": "deploy-vm-bedrock",
   "apps": [
     {
       "name": "api",
@@ -335,47 +524,105 @@ uv run deploy-vm instance verify my-server --domain example.com
 }
 ```
 
-**Note**: `domain` field is **not currently tracked** in instance.json but could be added for better state management.
+**Note:** Domain field not currently stored but could be added for better state management.
+
+### Security Configuration
+
+**Firewall rules:**
+- Port 22: SSH (AWS: restricted to creator IP if available, DO: open)
+- Port 80: HTTP (required for Let's Encrypt verification)
+- Port 443: HTTPS
+
+**SSL/TLS:**
+- Let's Encrypt certificates (free, auto-renewed)
+- TLS 1.2+ supported
+- Strong cipher suites (nginx/certbot defaults)
+- HSTS: Not enabled by default
+
+**DNS Security:**
+- Route53: Requires AWS credentials with Route53 permissions
+- DigitalOcean: Requires doctl authentication
+- DNSSEC: Not supported currently
+
+### Code Locations
+
+**DNS setup:**
+- `AWSProvider.setup_dns()` in `deploy_vm/providers.py`
+- `DigitalOceanProvider.setup_dns()` in `deploy_vm/providers.py`
+
+**SSL configuration:**
+- `setup_nginx_ssl()` in `deploy_vm/server.py`
+
+**DNS verification:**
+- `ensure_dns_matches()` in `deploy_vm/server.py`
+- `verify_http()` in `deploy_vm/server.py`
+
+**CLI commands:**
+- `deploy-vm nginx ssl` - Add SSL to existing instance
+- `deploy-vm [nuxt|fastapi] deploy` - Deploy with domain
+- `deploy-vm dns nameservers` - Get nameservers for domain
+- `deploy-vm instance verify` - Health check
+
+### External Resources
+
+- [AWS Route53 Documentation](https://docs.aws.amazon.com/route53/)
+- [DigitalOcean DNS API](https://docs.digitalocean.com/reference/api/api-reference/#tag/Domains)
+- [Let's Encrypt certbot](https://certbot.eff.org/docs/)
+- [nginx SSL Configuration](https://nginx.org/en/docs/http/configuring_https_servers.html)
+
+---
 
 ## Future Enhancements
 
+<details>
+<summary>📋 Planned features (click to expand)</summary>
+
 ### 1. Domain Field in Instance State
 
-**Problem**: Domain not tracked in instance.json
+**Status:** Proposed
 
-**Proposal**:
+**Problem:** Domain not tracked in instance.json
+
+**Proposal:** Add domain field to instance state:
 ```python
-# In cli.py deploy commands
 if domain:
     data["domain"] = domain
     data["email"] = email
     save_instance(name, data)
 ```
 
-**Benefits**:
-- Enables `deploy-vm instance info` to show domain
-- Allows `deploy-vm nginx renew` without re-specifying domain
+**Benefits:**
+- `deploy-vm instance info` shows domain
+- `deploy-vm ssl renew` doesn't need domain re-specified
 - Better state visibility
+
+---
 
 ### 2. Subdomain Support
 
-**Current limitation**: Only supports apex and www
+**Status:** Proposed
 
-**Proposal**: Add `--subdomain` flag
+**Current limitation:** Only supports apex and www
+
+**Proposal:** Add `--subdomain` flag:
 ```bash
 uv run deploy-vm nginx ssl my-server api.example.com admin@example.com
 ```
 
-**Implementation**:
+**Implementation:**
 - Modify `setup_dns()` to handle subdomains
 - Update certbot command generation
 - Add subdomain validation
 
+---
+
 ### 3. Multiple Domains per Instance
 
-**Use case**: Single instance serves multiple domains
+**Status:** Proposed
 
-**Proposal**:
+**Use case:** Single instance serves multiple domains
+
+**Proposal:**
 ```json
 {
   "domains": [
@@ -385,253 +632,62 @@ uv run deploy-vm nginx ssl my-server api.example.com admin@example.com
 }
 ```
 
-**Implementation**:
+**Implementation:**
 - Multiple nginx server blocks
 - Separate SSL certificates per domain
 - Domain-to-app routing
 
-### 4. DNS Commands
+---
 
-**Status**: ✅ Partially implemented
+### 4. Additional DNS Commands
 
-**Available**:
+**Status:** Partially implemented
+
+**Available now:**
 ```bash
-# Get nameservers for a domain (implemented)
-uv run deploy-vm dns nameservers example.com --provider-name aws
-uv run deploy-vm dns nameservers example.com --provider-name digitalocean
+deploy-vm dns nameservers example.com --provider-name aws
 ```
 
-**Future enhancements**:
+**Planned:**
 ```bash
-# Standalone DNS update (not yet implemented)
-uv run deploy-vm dns update example.com <instance-name>
-uv run deploy-vm dns list <instance-name>
-uv run deploy-vm dns delete example.com
+deploy-vm dns update example.com <instance-name>
+deploy-vm dns list <instance-name>
+deploy-vm dns delete example.com
 ```
 
-**Implementation notes**:
-- `dns_app` added to cli.py
-- `nameservers` command shows Route53 or DigitalOcean NS records
-- Future commands would call `provider.setup_dns()` directly
-- Would skip nginx/SSL configuration
+---
 
-### 5. Certificate Renewal Automation
+### 5. Manual Certificate Renewal
 
-**Current state**: certbot auto-renews via cron
+**Status:** Proposed
 
-**Enhancement**: Add manual renewal command
+**Current:** certbot auto-renews via cron
+
+**Enhancement:** Add manual renewal command:
 ```bash
-uv run deploy-vm ssl renew <instance-name>
+deploy-vm ssl renew <instance-name>
 ```
 
-## Testing Checklist
+</details>
 
-### Pre-deployment Testing
-
-- [ ] Route53 hosted zone exists (AWS)
-- [ ] Nameservers configured at registrar
-- [ ] DNS propagation complete (`dig example.com NS`)
-- [ ] AWS credentials valid (`aws sts get-caller-identity`)
-- [ ] SSH key exists (`ls ~/.ssh/id_*.pub`)
-
-### Post-deployment Testing
-
-- [ ] DNS resolves: `dig example.com A` returns instance IP
-- [ ] HTTP accessible: `curl http://example.com`
-- [ ] HTTPS redirects: `curl -I http://example.com` shows 301/302
-- [ ] HTTPS works: `curl https://example.com`
-- [ ] Certificate valid: `openssl s_client -connect example.com:443 -servername example.com`
-- [ ] Nginx configured: `ssh root@<ip> 'nginx -T'`
-- [ ] App responds: `curl https://example.com/health` (if implemented)
-
-## Security Considerations
-
-### SSL/TLS
-
-- **Let's Encrypt certificates**: 90-day validity, auto-renewed
-- **TLS versions**: Configured by certbot (TLS 1.2+)
-- **Cipher suites**: Default certbot/nginx strong ciphers
-- **HSTS**: Not enabled by default (could be added)
-
-### DNS
-
-- **Route53 access**: Requires AWS credentials with Route53 permissions
-- **DigitalOcean DNS**: Requires doctl authentication
-- **DNS hijacking**: No DNSSEC support currently
-
-### Firewall
-
-- **AWS Security Groups**: Ports 22, 80, 443 open
-- **UFW (Ubuntu)**: Managed on instance, same ports
-- **SSH restriction**: AWS SG restricts SSH to creator's IP (if available)
-
-## References
-
-### Code Locations
-
-- DNS setup: `deploy_vm/providers.py`
-  - AWS: lines 779-816
-  - DigitalOcean: lines 269-313
-- SSL configuration: `deploy_vm/server.py:565-630`
-- DNS verification: `deploy_vm/server.py:600-609`
-- CLI commands: `deploy_vm/cli.py`
-  - nginx ssl: line 240-263
-  - deploy commands: lines 360-449 (nuxt), 548-642 (fastapi)
-
-### External Documentation
-
-- [AWS Route53 API](https://docs.aws.amazon.com/route53/)
-- [DigitalOcean DNS API](https://docs.digitalocean.com/reference/api/api-reference/#tag/Domains)
-- [Let's Encrypt certbot](https://certbot.eff.org/docs/)
-- [nginx SSL configuration](https://nginx.org/en/docs/http/configuring_https_servers.html)
-
-## Examples
-
-### Example 1: AWS FastAPI with Domain
-
-```bash
-# 1. Prerequisites
-aws route53 create-hosted-zone --name myapi.com --caller-reference $(date +%s)
-# Update registrar nameservers to Route53 NS records
-# Wait 24-48 hours for propagation
-
-# 2. Verify DNS
-dig myapi.com NS
-# Should show: ns-xxx.awsdns-xx.org
-
-# 3. Deploy
-uv run deploy-vm fastapi deploy my-api /path/to/app \
-  --provider aws \
-  --region us-west-2 \
-  --vm-size t3.small \
-  --domain myapi.com \
-  --email admin@myapi.com
-
-# 4. Verify
-uv run deploy-vm instance verify my-api --domain myapi.com
-curl https://myapi.com
-```
-
-### Example 2: Add Domain to Existing Instance
-
-```bash
-# Instance already exists with --no-ssl
-uv run deploy-vm instance list
-
-# Add domain and SSL
-uv run deploy-vm nginx ssl my-api myapi.com admin@myapi.com \
-  --port 8000 \
-  --provider-name aws
-
-# The provider-name flag ensures correct DNS provider is used
-```
-
-### Example 3: DigitalOcean Nuxt with Domain
-
-```bash
-# 1. Prerequisites
-# Update registrar nameservers:
-#   ns1.digitalocean.com
-#   ns2.digitalocean.com
-#   ns3.digitalocean.com
-
-# 2. Verify DNS
-dig mysite.com NS
-
-# 3. Deploy
-uv run deploy-vm nuxt deploy my-site /path/to/nuxt \
-  --domain mysite.com \
-  --email admin@mysite.com \
-  --region syd1 \
-  --vm-size s-1vcpu-2gb
-
-# 4. Access
-open https://mysite.com
-```
-
-## Troubleshooting
-
-### Issue: "No Route53 hosted zone found"
-
-**Symptoms**: Deployment fails with error message
-
-**Diagnosis**:
-```bash
-aws route53 list-hosted-zones
-```
-
-**Solution**:
-1. Create hosted zone:
-   ```bash
-   aws route53 create-hosted-zone \
-     --name example.com \
-     --caller-reference $(date +%s)
-   ```
-2. Update domain registrar with Route53 nameservers
-3. Wait for propagation (24-48 hours)
-
-### Issue: "DNS verification timeout"
-
-**Symptoms**: Deployment hangs for 5 minutes then fails
-
-**Diagnosis**:
-```bash
-dig example.com A
-dig example.com NS
-```
-
-**Solutions**:
-1. If NS records wrong: Update nameservers at registrar
-2. If A record wrong: Check DNS update succeeded
-3. If DNS not propagated: Use `--skip-dns` flag and configure DNS manually
-
-### Issue: certbot fails with "Connection refused"
-
-**Symptoms**: SSL certificate issuance fails
-
-**Diagnosis**:
-```bash
-ssh root@<ip> 'systemctl status nginx'
-ssh root@<ip> 'ufw status'
-curl http://example.com
-```
-
-**Solutions**:
-1. Nginx not running: `ssh root@<ip> 'systemctl start nginx'`
-2. Firewall blocks: `ssh root@<ip> 'ufw allow 80/tcp && ufw allow 443/tcp'`
-3. DNS not resolving: Wait longer for DNS propagation
-
-### Issue: HTTPS shows wrong certificate
-
-**Symptoms**: Browser shows SSL error or wrong domain
-
-**Diagnosis**:
-```bash
-openssl s_client -connect example.com:443 -servername example.com | grep subject
-```
-
-**Solution**: Re-run certbot manually:
-```bash
-ssh root@<ip>
-certbot --nginx -d example.com -d www.example.com \
-  --email admin@example.com \
-  --agree-tos --redirect --force-renewal
-```
+---
 
 ## Summary
 
 The deploy-vm tool provides **complete domain support** for both AWS and DigitalOcean:
 
-✅ **Automatic DNS management** via provider APIs
-✅ **SSL certificate issuance** via Let's Encrypt
-✅ **DNS propagation verification** with retry logic
-✅ **Nginx configuration** with SSL/TLS
-✅ **Health verification** command
+✅ Automatic DNS management via provider APIs
+✅ SSL certificate issuance via Let's Encrypt
+✅ DNS propagation verification with retry logic
+✅ Nginx configuration with SSL/TLS
+✅ Health verification command
 
-**Key requirement**: DNS must be configured at the provider (Route53 for AWS, DigitalOcean DNS) **before** deployment.
+**Key requirement:** DNS must be configured at the provider **before** deployment.
 
-**Recommended workflow**:
-1. Configure nameservers at domain registrar
+**Recommended workflow:**
+1. Configure nameservers at domain registrar (one-time)
 2. Wait 24-48 hours for propagation
 3. Deploy with `--domain` and `--email` flags
 4. Verify with `deploy-vm instance verify --domain`
+
+**Questions?** Check [Troubleshooting](#troubleshooting) or file an issue.

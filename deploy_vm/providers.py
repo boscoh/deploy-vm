@@ -104,6 +104,10 @@ class DigitalOceanProvider:
             )
 
     def validate_auth(self) -> None:
+        """Validate DigitalOcean authentication via doctl CLI.
+
+        :raises SystemExit: If authentication validation fails
+        """
         result = subprocess.run(
             ["doctl", "auth", "validate"], capture_output=True, text=True
         )
@@ -111,6 +115,11 @@ class DigitalOceanProvider:
             error("doctl not authenticated. Run: doctl auth init")
 
     def instance_exists(self, name: str) -> bool:
+        """Check if a droplet with the given name exists.
+
+        :param name: The droplet name to check
+        :return: True if droplet exists, False otherwise
+        """
         droplets = run_cmd_json("doctl", "compute", "droplet", "list")
         return any(d["name"] == name for d in droplets)
 
@@ -132,6 +141,15 @@ class DigitalOceanProvider:
     def create_instance(
         self, name: str, region: str, vm_size: str, iam_role: str | None = None
     ) -> dict:
+        """Create a new DigitalOcean droplet with SSH key setup.
+
+        :param name: The name for the new droplet
+        :param region: The DigitalOcean region to create the droplet in
+        :param vm_size: The droplet size (e.g., 's-1vcpu-1gb')
+        :param iam_role: Unused for DigitalOcean (AWS compatibility parameter)
+        :return: Dictionary with 'id' and 'ip' keys for the created droplet
+        :raises SystemExit: If droplet already exists or creation fails
+        """
         self.validate_auth()
 
         if self.instance_exists(name):
@@ -199,10 +217,20 @@ class DigitalOceanProvider:
         return {"id": droplet["id"], "ip": ip}
 
     def delete_instance(self, instance_id: str) -> None:
+        """Delete a DigitalOcean droplet by ID.
+
+        :param instance_id: The droplet ID to delete
+        :raises SystemExit: If authentication fails or deletion fails
+        """
         self.validate_auth()
         run_cmd("doctl", "compute", "droplet", "delete", str(instance_id), "--force")
 
     def list_instances(self) -> list[dict]:
+        """List all DigitalOcean droplets in the account.
+
+        :return: List of dictionaries with 'name', 'ip', 'status', and 'region' keys
+        :raises SystemExit: If authentication fails
+        """
         self.validate_auth()
         droplets = run_cmd_json("doctl", "compute", "droplet", "list")
         return [

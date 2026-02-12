@@ -46,6 +46,12 @@ arx/
 # Nameservers cache
 *.nameservers.json
 
+# Deployment scripts
+tspot*
+
+# UV lock file
+uv.lock
+
 # OS
 .DS_Store
 Thumbs.db

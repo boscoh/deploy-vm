@@ -23,7 +23,7 @@ Deploy with a custom domain in three steps:
 ```bash
 # 1. Get nameservers (creates hosted zone automatically for AWS)
 #    AWS:
-uv run deploy-vm dns nameservers example.com --provider-name aws
+uv run deploy-vm dns nameservers example.com --provider aws
 #    DigitalOcean: Use ns1/2/3.digitalocean.com
 
 # 2. Configure nameservers at your domain registrar, then wait 24-48 hours
@@ -55,7 +55,7 @@ uv run deploy-vm fastapi deploy my-api /path/to/app \
 
 **Step 1: Get Route53 Nameservers (creates hosted zone automatically)**
 ```bash
-uv run deploy-vm dns nameservers example.com --provider-name aws
+uv run deploy-vm dns nameservers example.com --provider aws
 ```
 
 This command:
@@ -185,10 +185,10 @@ Add a domain to an instance that was initially deployed without one.
 # Instance was created with --no-ssl, now add domain
 uv run deploy-vm nginx ssl my-api example.com admin@example.com \
   --port 8000 \
-  --provider-name aws
+  --provider aws
 ```
 
-**Note:** Must specify `--provider-name` so deploy-vm knows which DNS provider to use.
+**Note:** Must specify `--provider` so deploy-vm knows which DNS provider to use.
 
 **What happens:**
 1. Updates DNS records (example.com → instance IP)
@@ -226,12 +226,12 @@ Verify domain configuration before deployment.
 
 **AWS:**
 ```bash
-uv run deploy-vm dns nameservers example.com --provider-name aws
+uv run deploy-vm dns nameservers example.com --provider aws
 ```
 
 **DigitalOcean:**
 ```bash
-uv run deploy-vm dns nameservers example.com --provider-name digitalocean
+uv run deploy-vm dns nameservers example.com --provider digitalocean
 ```
 
 **Output shows:**
@@ -310,7 +310,7 @@ aws route53 list-hosted-zones
 **Solution:**
 1. Create hosted zone and get nameservers:
    ```bash
-   uv run deploy-vm dns nameservers example.com --provider-name aws
+   uv run deploy-vm dns nameservers example.com --provider aws
    ```
 2. Update domain registrar with Route53 nameservers (shown in command output)
 3. Wait 24-48 hours for propagation
@@ -650,7 +650,7 @@ uv run deploy-vm nginx ssl my-server api.example.com admin@example.com
 
 **Available now:**
 ```bash
-deploy-vm dns nameservers example.com --provider-name aws
+deploy-vm dns nameservers example.com --provider aws
 ```
 
 **Planned:**

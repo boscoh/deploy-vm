@@ -60,7 +60,7 @@ app.command(dns_app)
 def create_instance(
     name: str,
     *,
-    provider_name: ProviderName | None = None,
+    provider: ProviderName | None = None,
     region: str | None = None,
     vm_size: str | None = None,
     os_image: str | None = None,
@@ -71,7 +71,7 @@ def create_instance(
 ):
     """Create cloud instance and set it up.
 
-    :param provider_name: Cloud provider (default: DEPLOY_VM_PROVIDER or digitalocean)
+    :param provider: Cloud provider (default: DEPLOY_VM_PROVIDER or digitalocean)
     :param region: Cloud region
     :param vm_size: Instance size (AWS: t3.micro, t3.small, etc. | DO: s-1vcpu-1gb, s-2vcpu-2gb, etc.)
     :param os_image: OS image to use
@@ -79,7 +79,7 @@ def create_instance(
     :param no_setup: Skip firewall, swap, and user setup
     :param iam_role: AWS only: IAM role name for instance profile (default: deploy-vm-bedrock)
     """
-    p = get_provider(provider_name, region=region, os_image=os_image, vm_size=vm_size)
+    p = get_provider(provider, region=region, os_image=os_image, vm_size=vm_size)
 
     # Default IAM role for AWS instances (for Bedrock access)
     if p.provider_name == "aws" and iam_role is None:
@@ -117,18 +117,18 @@ def create_instance(
 
 @instance_app.command(name="delete")
 def delete_instance(
-    name: str, *, provider_name: ProviderName | None = None, force: bool = False
+    name: str, *, provider: ProviderName | None = None, force: bool = False
 ):
     """Delete instance."""
     import json
 
     instance_file = Path(f"{name}.instance.json")
-    p = get_provider(provider_name)
+    p = get_provider(provider)
 
     if instance_file.exists():
         data = json.loads(instance_file.read_text())
-        provider_name = data.get("provider", provider_name)
-        p = get_provider(provider_name)
+        provider = data.get("provider", provider)
+        p = get_provider(provider)
     else:
         log(f"No {name}.instance.json found, looking up from {p.provider_name}...")
         p.validate_auth()
@@ -159,10 +159,10 @@ def delete_instance(
 @instance_app.command(name="list")
 def list_instances(
     *,
-    provider_name: ProviderName | None = None,
+    provider: ProviderName | None = None,
     region: str | None = None,
 ):
-    p = get_provider(provider_name, region=region)
+    p = get_provider(provider, region=region)
 
     if p.provider_name == "aws":
         log(f"Listing instances in {p.region}...")
@@ -207,17 +207,17 @@ def list_instance_apps(target: str):
 @instance_app.command(name="cleanup")
 def cleanup_resources(
     *,
-    provider_name: ProviderName | None = None,
+    provider: ProviderName | None = None,
     region: str | None = None,
     dry_run: bool = True,
 ):
     """Cleanup orphaned security groups not attached to running instances.
 
-    :param provider_name: Cloud provider
+    :param provider: Cloud provider
     :param region: AWS region (default: ap-southeast-2)
     :param dry_run: Show what would be deleted without deleting (default: true)
     """
-    p = get_provider(provider_name, region=region)
+    p = get_provider(provider, region=region)
     p.cleanup_resources(dry_run=dry_run)
 
 
@@ -260,7 +260,7 @@ def nginx_ssl_command(
     static_dir: str | None = None,
     skip_dns: bool = False,
     ssh_user: str = "deploy",
-    provider_name: ProviderName = "digitalocean",
+    provider: ProviderName = "digitalocean",
 ):
     """Setup nginx and SSL certificate."""
     ip = resolve_ip(target)
@@ -272,7 +272,7 @@ def nginx_ssl_command(
         static_dir=static_dir,
         skip_dns=skip_dns,
         ssh_user=ssh_user,
-        provider_name=provider_name,
+        provider_name=provider,
     )
 
 
@@ -381,7 +381,7 @@ def deploy_nuxt(
     ssh_user: str = "deploy",
     port: int = 3000,
     app_name: str = "nuxt",
-    provider_name: ProviderName = "digitalocean",
+    provider: ProviderName = "digitalocean",
     region: str = "syd1",
     vm_size: str = "s-1vcpu-1gb",
     os_image: str = "ubuntu-24-04-x64",
@@ -405,7 +405,7 @@ def deploy_nuxt(
         # IAM role will be set to default in create_instance for AWS
         create_instance(
             name,
-            provider_name=provider_name,
+            provider=provider,
             region=region,
             vm_size=vm_size,
             os_image=os_image,
@@ -578,7 +578,7 @@ def deploy_fastapi(
     app_module: str = "app:app",
     workers: int = 2,
     static_subdir: str | None = None,
-    provider_name: ProviderName | None = None,
+    provider: ProviderName | None = None,
     region: str | None = None,
     vm_size: str | None = None,
     os_image: str | None = None,
@@ -600,7 +600,7 @@ def deploy_fastapi(
         # IAM role will be set to default in create_instance for AWS
         create_instance(
             name,
-            provider_name=provider_name,
+            provider=provider,
             region=region,
             vm_size=vm_size,
             os_image=os_image,
@@ -671,7 +671,7 @@ def deploy_fastapi(
 def get_nameservers(
     domain: str,
     *,
-    provider_name: ProviderName | None = None,
+    provider: ProviderName | None = None,
 ):
     """Get nameservers for a domain (creates hosted zone if needed for AWS).
 
@@ -680,12 +680,12 @@ def get_nameservers(
     For DigitalOcean: Returns standard DigitalOcean nameservers.
 
     :param domain: Domain name (e.g., example.com)
-    :param provider_name: Cloud provider (aws or digitalocean)
+    :param provider: Cloud provider (aws or digitalocean)
     """
     import json
     from pathlib import Path
 
-    p = get_provider(provider_name)
+    p = get_provider(provider)
 
     if p.provider_name == "aws":
         import time

@@ -1099,25 +1099,25 @@ class AWSProvider:
 
 
 def get_provider(
-    provider_name: ProviderName | None = None,
+    provider: ProviderName | None = None,
     *,
     region: str | None = None,
     os_image: str | None = None,
     vm_size: str | None = None,
 ) -> Provider:
     """Get a provider instance with defaults applied."""
-    if provider_name is None:
+    if provider is None:
         load_dotenv()
-        provider_name = os.getenv("DEPLOY_VM_PROVIDER", "digitalocean")
-        if provider_name not in ["digitalocean", "aws"]:
+        provider = os.getenv("DEPLOY_VM_PROVIDER", "digitalocean")
+        if provider not in ["digitalocean", "aws"]:
             log(
-                f"[WARN] Invalid DEPLOY_VM_PROVIDER '{provider_name}', using 'digitalocean'"
+                f"[WARN] Invalid DEPLOY_VM_PROVIDER '{provider}', using 'digitalocean'"
             )
-            provider_name = "digitalocean"
-    elif provider_name not in ["digitalocean", "aws"]:
-        error(f"Unknown provider: {provider_name}. Available: digitalocean, aws")
+            provider = "digitalocean"
+    elif provider not in ["digitalocean", "aws"]:
+        error(f"Unknown provider: {provider}. Available: digitalocean, aws")
 
-    if provider_name == "digitalocean":
+    if provider == "digitalocean":
         return DigitalOceanProvider(os_image=os_image, region=region, vm_size=vm_size)
     else:  # aws
         return AWSProvider(os_image=os_image, region=region, vm_size=vm_size)

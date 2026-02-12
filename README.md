@@ -35,7 +35,7 @@ DEPLOY_VM_PROVIDER=digitalocean
 **With domain + SSL (recommended):**
 ```bash
 # Get nameservers and configure at registrar first
-uv run deploy-vm dns nameservers example.com --provider-name aws
+uv run deploy-vm dns nameservers example.com --provider aws
 
 # Deploy with SSL (creates instance, deploys app, configures SSL)
 uv run deploy-vm fastapi deploy my-server /path/to/app \
@@ -112,7 +112,7 @@ Deploy without SSL first, add it when ready:
 uv run deploy-vm fastapi deploy my-server /path/to/app --no-ssl
 
 # 2. Get nameservers (creates hosted zone automatically)
-uv run deploy-vm dns nameservers example.com --provider-name aws
+uv run deploy-vm dns nameservers example.com --provider aws
 
 # 3. Configure nameservers at registrar, wait 24-48h
 

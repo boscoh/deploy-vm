@@ -19,11 +19,12 @@ Complete guide for adding custom domains with SSL/HTTPS to your deploy-vm instan
 Deploy with a custom domain in three steps:
 
 ```bash
-# 1. Configure nameservers at your domain registrar (one-time setup)
-#    AWS: Use Route53 nameservers from `deploy-vm dns nameservers`
+# 1. Get nameservers (creates hosted zone automatically for AWS)
+#    AWS:
+uv run deploy-vm dns nameservers example.com --provider-name aws
 #    DigitalOcean: Use ns1/2/3.digitalocean.com
 
-# 2. Wait 24-48 hours for DNS propagation
+# 2. Configure nameservers at your domain registrar, then wait 24-48 hours
 
 # 3. Deploy with domain
 uv run deploy-vm fastapi deploy my-api /path/to/app \
@@ -50,35 +51,39 @@ uv run deploy-vm fastapi deploy my-api /path/to/app \
 <details>
 <summary>📋 Step-by-step AWS setup</summary>
 
-**Step 1: Create Route53 Hosted Zone**
+**Step 1: Get Route53 Nameservers (creates hosted zone automatically)**
 ```bash
-aws route53 create-hosted-zone \
-  --name example.com \
-  --caller-reference $(date +%s)
-```
-
-**Step 2: Get Route53 Nameservers**
-```bash
-# Recommended: Use deploy-vm
 uv run deploy-vm dns nameservers example.com --provider-name aws
-
-# Alternative: Use AWS CLI
-aws route53 get-hosted-zone --id <zone-id>
 ```
 
-You'll see nameservers like:
+This command:
+- ✅ Creates Route53 hosted zone if it doesn't exist
+- ✅ Retrieves nameservers from the zone
+- ✅ Caches result in `example.com.nameservers.json` for faster lookups
+
+You'll see output like:
 ```
-ns-1234.awsdns-12.org
-ns-5678.awsdns-34.com
-ns-9012.awsdns-56.net
-ns-3456.awsdns-78.co.uk
+Route53 Hosted Zone: example.com.
+Zone ID: Z1234567890ABC
+
+Nameservers:
+  ns-1234.awsdns-12.org
+  ns-5678.awsdns-34.com
+  ns-9012.awsdns-56.net
+  ns-3456.awsdns-78.co.uk
+
+Configure these nameservers at your domain registrar:
+  1. Log in to your domain registrar (GoDaddy, Namecheap, etc.)
+  2. Find DNS/Nameserver settings for example.com
+  3. Replace existing nameservers with the ones listed above
+  4. Wait 24-48 hours for DNS propagation
 ```
 
-**Step 3: Update Domain Registrar**
+**Step 2: Update Domain Registrar**
 
-Go to your domain registrar (GoDaddy, Namecheap, etc.) and replace their nameservers with the Route53 nameservers from Step 2.
+Go to your domain registrar and replace their nameservers with the Route53 nameservers from Step 1.
 
-**Step 4: Verify Propagation** (24-48 hours later)
+**Step 3: Verify Propagation** (24-48 hours later)
 ```bash
 dig example.com NS
 # Should show Route53 nameservers
@@ -301,13 +306,11 @@ aws route53 list-hosted-zones
 ```
 
 **Solution:**
-1. Create hosted zone:
+1. Create hosted zone and get nameservers:
    ```bash
-   aws route53 create-hosted-zone \
-     --name example.com \
-     --caller-reference $(date +%s)
+   uv run deploy-vm dns nameservers example.com --provider-name aws
    ```
-2. Update domain registrar with Route53 nameservers
+2. Update domain registrar with Route53 nameservers (shown in command output)
 3. Wait 24-48 hours for propagation
 4. Retry deployment
 

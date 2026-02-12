@@ -32,7 +32,7 @@ def get_local_ssh_key() -> tuple[str, str]:
             decoded = base64.b64decode(key_data)
             fingerprint = hashlib.md5(decoded).hexdigest()
             fingerprint = ":".join(fingerprint[i : i + 2] for i in range(0, 32, 2))
-            log(f"Using SSH key: {key_path}")
+            log(f"Using SSH key: '{key_path}'")
             return content, fingerprint
 
     error(f"No SSH key found in ~/.ssh/ (tried: {', '.join(key_names)})")
@@ -99,7 +99,7 @@ class DigitalOceanProvider:
         if self.vm_size not in self.VM_SIZES:
             error(
                 f"Invalid DigitalOcean VM size: '{self.vm_size}'\n"
-                f"Valid sizes: {', '.join(self.VM_SIZES)}\n"
+                f"Valid sizes: '{', '.join(self.VM_SIZES)}'\n"
                 f"See PROVIDER_COMPARISON.md for details."
             )
 
@@ -161,7 +161,7 @@ class DigitalOceanProvider:
         existing = next((k for k in keys if k["fingerprint"] == fingerprint), None)
         if existing:
             ssh_key_id = str(existing["id"])
-            log(f"Found matching SSH key in DigitalOcean: {existing['name']}")
+            log(f"Found matching SSH key in DigitalOcean: '{existing['name']}'")
         else:
             log("Uploading SSH key to DigitalOcean...")
             key_name = f"deploy-vm-{fingerprint[-8:]}"
@@ -179,7 +179,7 @@ class DigitalOceanProvider:
             if not uploaded:
                 error("Failed to upload SSH key")
             ssh_key_id = str(uploaded["id"])
-            log(f"Uploaded SSH key: {key_name}")
+            log(f"Uploaded SSH key: '{key_name}'")
 
         run_cmd(
             "doctl",
@@ -367,7 +367,7 @@ class AWSProvider:
         elif region not in self.REGIONS:
             error(
                 f"Invalid AWS region: '{region}'\n"
-                f"Valid AWS regions: {', '.join(self.REGIONS[:6])}, ...\n"
+                f"Valid AWS regions: '{', '.join(self.REGIONS[:6])}', ...\n"
                 f"See PROVIDER_COMPARISON.md for full list."
             )
         else:
@@ -385,7 +385,7 @@ class AWSProvider:
         if self.vm_size not in self.VM_SIZES:
             error(
                 f"Invalid AWS instance type: '{self.vm_size}'\n"
-                f"Valid types: {', '.join(self.VM_SIZES[:6])}, ...\n"
+                f"Valid types: '{', '.join(self.VM_SIZES[:6])}', ...\n"
                 f"See PROVIDER_COMPARISON.md for full list."
             )
 
@@ -608,7 +608,7 @@ class AWSProvider:
         )
 
         if not response["Images"]:
-            error(f"No AMI found matching pattern: {self.os_image}")
+            error(f"No AMI found matching pattern: '{self.os_image}'")
 
         images = sorted(
             response["Images"], key=lambda x: x["CreationDate"], reverse=True
@@ -629,12 +629,12 @@ class AWSProvider:
 
         try:
             ec2.describe_key_pairs(KeyNames=[key_name])
-            log(f"Using existing SSH key: {key_name}")
+            log(f"Using existing SSH key: '{key_name}'")
         except ClientError as e:
             if e.response["Error"]["Code"] == "InvalidKeyPair.NotFound":
                 log("Uploading SSH key to AWS...")
                 ec2.import_key_pair(KeyName=key_name, PublicKeyMaterial=key_content)
-                log(f"Uploaded SSH key: {key_name}")
+                log(f"Uploaded SSH key: '{key_name}'")
             else:
                 raise
 
@@ -657,7 +657,7 @@ class AWSProvider:
             )
             if response["SecurityGroups"]:
                 sg_id = response["SecurityGroups"][0]["GroupId"]
-                log(f"Using existing security group: {sg_name}")
+                log(f"Using existing security group: '{sg_name}'")
             else:
                 raise ClientError(
                     {"Error": {"Code": "InvalidGroup.NotFound"}},
@@ -692,7 +692,7 @@ class AWSProvider:
                         f"Fix with: aws ec2 create-default-vpc --region {self.aws_config.get('region_name', 'ap-southeast-2')}"
                     )
 
-                log(f"Using VPC: {vpc_id}")
+                log(f"Using VPC: '{vpc_id}'")
 
                 response = ec2.create_security_group(
                     GroupName=sg_name,
@@ -717,7 +717,7 @@ class AWSProvider:
                 my_ip = self._get_my_ip()
                 ssh_cidr = f"{my_ip}/32" if my_ip else "0.0.0.0/0"
                 if my_ip:
-                    log(f"Restricting SSH access to your IP: {my_ip}")
+                    log(f"Restricting SSH access to your IP: '{my_ip}'")
 
                 ec2.authorize_security_group_ingress(
                     GroupId=sg_id,
@@ -748,7 +748,7 @@ class AWSProvider:
                         },
                     ],
                 )
-                log(f"Created security group: {sg_name}")
+                log(f"Created security group: '{sg_name}'")
             else:
                 raise
 
@@ -787,10 +787,10 @@ class AWSProvider:
 
         try:
             iam.get_role(RoleName=role_name)
-            log(f"Using existing IAM role: {role_name}")
+            log(f"Using existing IAM role: '{role_name}'")
         except ClientError as e:
             if e.response["Error"]["Code"] == "NoSuchEntity":
-                log(f"Creating IAM role: {role_name}")
+                log(f"Creating IAM role: '{role_name}'")
                 iam.create_role(
                     RoleName=role_name,
                     AssumeRolePolicyDocument=json.dumps(trust_policy),
@@ -800,14 +800,14 @@ class AWSProvider:
                         {"Key": "CreatedAt", "Value": datetime.now(timezone.utc).isoformat()},
                     ]
                 )
-                log(f"Created IAM role: {role_name}")
+                log(f"Created IAM role: '{role_name}'")
             else:
                 raise
 
         bedrock_policy_arn = "arn:aws:iam::aws:policy/AmazonBedrockFullAccess"
         try:
             iam.attach_role_policy(RoleName=role_name, PolicyArn=bedrock_policy_arn)
-            log(f"Attached AmazonBedrockFullAccess policy to {role_name}")
+            log(f"Attached AmazonBedrockFullAccess policy to '{role_name}'")
         except ClientError as e:
             if e.response["Error"]["Code"] != "EntityAlreadyExists":
                 pass
@@ -815,10 +815,10 @@ class AWSProvider:
         profile_name = role_name
         try:
             iam.get_instance_profile(InstanceProfileName=profile_name)
-            log(f"Using existing instance profile: {profile_name}")
+            log(f"Using existing instance profile: '{profile_name}'")
         except ClientError as e:
             if e.response["Error"]["Code"] == "NoSuchEntity":
-                log(f"Creating instance profile: {profile_name}")
+                log(f"Creating instance profile: '{profile_name}'")
                 iam.create_instance_profile(
                     InstanceProfileName=profile_name,
                     Tags=[
@@ -826,7 +826,7 @@ class AWSProvider:
                         {"Key": "CreatedAt", "Value": datetime.now(timezone.utc).isoformat()},
                     ]
                 )
-                log(f"Created instance profile: {profile_name}")
+                log(f"Created instance profile: '{profile_name}'")
             else:
                 raise
 
@@ -835,7 +835,7 @@ class AWSProvider:
                 InstanceProfileName=profile_name,
                 RoleName=role_name
             )
-            log(f"Added role {role_name} to instance profile")
+            log(f"Added role '{role_name}' to instance profile")
         except ClientError as e:
             if e.response["Error"]["Code"] != "LimitExceeded":
                 pass
@@ -900,7 +900,7 @@ class AWSProvider:
         ec2 = self._get_ec2_client()
 
         ami_id = self._find_ami(ec2)
-        log(f"Using AMI: {ami_id}")
+        log(f"Using AMI: '{ami_id}'")
 
         # Setup IAM role if specified
         instance_profile_name = None
@@ -937,7 +937,7 @@ class AWSProvider:
 
         if instance_profile_name:
             run_params["IamInstanceProfile"] = {"Name": instance_profile_name}
-            log(f"Attaching IAM instance profile: {instance_profile_name}")
+            log(f"Attaching IAM instance profile: '{instance_profile_name}'")
 
         response = ec2.run_instances(**run_params)
 
@@ -1010,9 +1010,9 @@ class AWSProvider:
                 break
 
         if not zone_id:
-            error(f"No Route53 hosted zone found for domain: {domain}")
+            error(f"No Route53 hosted zone found for domain: '{domain}'")
 
-        log(f"Updating Route53 DNS records for {domain}...")
+        log(f"Updating Route53 DNS records for '{domain}'...")
 
         for record_name in [domain, f"www.{domain}"]:
             change_batch = {
@@ -1045,7 +1045,7 @@ class AWSProvider:
         ec2 = self._get_ec2_client()
         region = self.aws_config.get("region_name", "ap-southeast-2")
 
-        log(f"Scanning for orphaned security groups in {region}...")
+        log(f"Scanning for orphaned security groups in '{region}'...")
 
         try:
             sgs = ec2.describe_security_groups(
@@ -1078,21 +1078,21 @@ class AWSProvider:
                 if instances:
                     instance_count = sum(len(r["Instances"]) for r in instances)
                     log(
-                        f"Security group {sg_name} ({sg_id}) in use by {instance_count} instance(s)"
+                        f"Security group '{sg_name}' ('{sg_id}') in use by {instance_count} instance(s)"
                     )
                 else:
                     if dry_run:
                         log(
-                            f"[DRY RUN] Would delete unused security group: {sg_name} ({sg_id})"
+                            f"[DRY RUN] Would delete unused security group: '{sg_name}' ('{sg_id}')"
                         )
                     else:
                         ec2.delete_security_group(GroupId=sg_id)
-                        log(f"✓ Deleted security group: {sg_name} ({sg_id})")
+                        log(f"✓ Deleted security group: '{sg_name}' ('{sg_id}')")
             except ClientError as e:
                 if "DependencyViolation" in str(e):
-                    log(f"Security group {sg_name} ({sg_id}) is still in use")
+                    log(f"Security group '{sg_name}' ('{sg_id}') is still in use")
                 else:
-                    log(f"[WARN] Could not process {sg_name}: {e}")
+                    log(f"[WARN] Could not process '{sg_name}': {e}")
 
         if dry_run:
             log("\nRun with --no-dry-run to actually delete resources")

@@ -55,7 +55,7 @@ def resolve_app_name(
     elif len(apps) > 1:
         app_names = ", ".join(app["name"] for app in apps)
         error(
-            f"Multiple {app_type} apps found: {app_names}. Use --app-name to specify."
+            f"Multiple '{app_type}' apps found: '{app_names}'. Use --app-name to specify."
         )
     else:
         return fallback if fallback else app_type

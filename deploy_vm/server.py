@@ -166,7 +166,7 @@ def load_instance(name: str) -> dict:
     """
     path = Path(f"{name}.instance.json")
     if not path.exists():
-        error(f"Instance file not found: {path}")
+        error(f"Instance file not found: '{path}'")
     data = json.loads(path.read_text())
     if "apps" not in data and "app_name" in data:
         app_data = {"name": data["app_name"], "type": data.get("app_type", "nuxt")}
@@ -222,7 +222,7 @@ def add_app_to_instance(
         old_port = existing_app.get("port")
 
         if old_type != app_type:
-            warn(f"App '{app_name}' type changing from {old_type} to {app_type}")
+            warn(f"App '{app_name}' type changing from '{old_type}' to '{app_type}'")
 
         if port is not None and port != old_port:
             conflicting_apps = [
@@ -240,7 +240,7 @@ def add_app_to_instance(
         elif "port" in existing_app and old_port is not None:
             pass
 
-        log(f"Updated app '{app_name}' ({old_type} -> {app_type})")
+        log(f"Updated app '{app_name}' ('{old_type}' -> '{app_type}')")
     else:
         if port is not None:
             conflicting_apps = [
@@ -254,7 +254,7 @@ def add_app_to_instance(
         if port is not None:
             app_data["port"] = port
         instance["apps"].append(app_data)
-        log(f"Added app '{app_name}' ({app_type})")
+        log(f"Added app '{app_name}' ('{app_type}')")
 
 
 def is_valid_ip(ip: str) -> bool:
@@ -351,7 +351,7 @@ def compute_hash(source: str, exclude: list[str] | None = None) -> str:
 
 
 def wait_for_ssh(ip: str, user: str = "deploy", timeout: int = SSH_TIMEOUT):
-    log(f"Waiting for SSH on {ip}...")
+    log(f"Waiting for SSH on '{ip}'...")
     start = time.time()
     while time.time() - start < timeout:
         try:
@@ -364,7 +364,7 @@ def wait_for_ssh(ip: str, user: str = "deploy", timeout: int = SSH_TIMEOUT):
         except Exception:
             pass
         time.sleep(5)
-    error(f"SSH timeout after {timeout}s")
+    error(f"SSH timeout after '{timeout}s'")
 
 
 def verify_http(ip: str) -> bool:
@@ -379,9 +379,9 @@ def verify_http(ip: str) -> bool:
                     return True
         except (urllib.error.URLError, urllib.error.HTTPError, Exception):
             pass
-        warn(f"Cannot connect to http://{ip}/ ({i + 1}/{HTTP_VERIFY_RETRIES})")
+        warn(f"Cannot connect to 'http://{ip}/' ({i + 1}/{HTTP_VERIFY_RETRIES})")
         time.sleep(HTTP_VERIFY_DELAY)
-    error(f"Cannot connect to server on port 80. Check UFW: ssh deploy@{ip} 'sudo ufw status'")
+    error(f"Cannot connect to server on port 80. Check UFW: ssh deploy@'{ip}' 'sudo ufw status'")
 
 
 def setup_firewall(ip: str, ssh_user: str = "root"):
@@ -456,7 +456,7 @@ def create_user(ip: str, user: str = "deploy", ssh_user: str = "root"):
 def setup_server(
     ip: str, *, user: str = "deploy", ssh_user: str = "root", swap_size: str = "4G"
 ):
-    log(f"Setting up server at {ip}...")
+    log(f"Setting up server at '{ip}'...")
 
     script = dedent("""
         set -e
@@ -473,7 +473,7 @@ def setup_server(
     setup_firewall(ip, ssh_user=ssh_user)
     setup_swap(ip, swap_size=swap_size, ssh_user=ssh_user)
 
-    log(f"Creating user: {user}")
+    log(f"Creating user: '{user}'")
     create_user(ip, user=user, ssh_user=ssh_user)
     log("Server setup complete")
 
@@ -509,7 +509,7 @@ def ensure_dns_matches(
         return False
 
     warn(
-        f"DNS mismatch: {domain} points to {current_ip or 'nothing'}, expected {expected_ip}"
+        f"DNS mismatch: '{domain}' points to '{current_ip or 'nothing'}', expected '{expected_ip}'"
     )
     log("Updating DNS...")
     p = get_provider(provider_name)
@@ -586,7 +586,7 @@ def setup_nginx_ip(
         "_", port, static_dir, listen="80 default_server"
     )
 
-    log(f"Setting up nginx for IP access on {ip}...")
+    log(f"Setting up nginx for IP access on '{ip}'...")
     ssh_script(
         ip, "sudo apt-get update && sudo apt-get install -y nginx", user=ssh_user
     )
@@ -600,7 +600,7 @@ def setup_nginx_ip(
     )
 
     verify_http(ip)
-    log(f"Nginx configured! http://{ip}")
+    log(f"Nginx configured! 'http://{ip}'")
 
 
 def setup_nginx_ssl(
@@ -641,7 +641,7 @@ def setup_nginx_ssl(
     for i in range(DNS_VERIFY_RETRIES):
         resolved = resolve_dns_a(domain)
         if resolved == ip:
-            log(f"DNS verified: {domain} -> {ip}")
+            log(f"DNS verified: '{domain}' -> '{ip}'")
             break
         warn(f"Waiting for DNS... ({i + 1}/{DNS_VERIFY_RETRIES})")
         time.sleep(DNS_VERIFY_DELAY)
@@ -666,7 +666,7 @@ def setup_nginx_ssl(
         fi
     """).strip()
     ssh_script(ip, ssl_script, user=ssh_user)
-    log(f"SSL configured! https://{domain}")
+    log(f"SSL configured! 'https://{domain}'")
 
 
 def verify_instance(
@@ -684,14 +684,14 @@ def verify_instance(
     data = load_instance(name)
     ip = data["ip"]
 
-    print(f"Verifying {name} ({ip})...")
+    print(f"Verifying '{name}' ('{ip}')...")
     print("-" * 40)
     issues = []
 
     # SSH check
     try:
         uptime = ssh(ip, "uptime", user=ssh_user).strip()
-        print(f"[OK] SSH: {uptime}")
+        print(f"[OK] SSH: '{uptime}'")
     except Exception as e:
         print(f"[FAIL] SSH: {e}")
         issues.append("SSH connection failed")
@@ -717,37 +717,37 @@ def verify_instance(
     if nginx_status == "active":
         print("[OK] Nginx: running")
     else:
-        print(f"[FAIL] Nginx: {nginx_status}")
+        print(f"[FAIL] Nginx: '{nginx_status}'")
         issues.append("Nginx not running")
 
     if domain:
         dns_ip = resolve_dns_a(domain)
         if dns_ip == ip:
-            print(f"[OK] DNS: {domain} -> {ip}")
+            print(f"[OK] DNS: '{domain}' -> '{ip}'")
         elif dns_ip:
-            print(f"[FAIL] DNS: {domain} -> {dns_ip} (expected {ip})")
-            issues.append(f"DNS mismatch: {dns_ip} != {ip}")
+            print(f"[FAIL] DNS: '{domain}' -> '{dns_ip}' (expected '{ip}')")
+            issues.append(f"DNS mismatch: '{dns_ip}' != '{ip}'")
         else:
-            print(f"[FAIL] DNS: {domain} -> no A record found")
+            print(f"[FAIL] DNS: '{domain}' -> no A record found")
             issues.append("DNS check failed")
 
     status_code, response_line = check_http_status(f"http://{ip}")
     if status_code and status_code in [200, 301, 302]:
         print("[OK] HTTP: responding")
     elif status_code:
-        print(f"[WARN] HTTP: {response_line}")
+        print(f"[WARN] HTTP: '{response_line}'")
     else:
-        print(f"[FAIL] HTTP: {response_line}")
+        print(f"[FAIL] HTTP: '{response_line}'")
         issues.append("HTTP not responding")
 
     if domain:
         status_code, response_line = check_http_status(f"https://{domain}")
         if status_code == 200:
-            print(f"[OK] HTTPS: {domain} responding")
+            print(f"[OK] HTTPS: '{domain}' responding")
         elif status_code:
-            print(f"[WARN] HTTPS: {response_line}")
+            print(f"[WARN] HTTPS: '{response_line}'")
         else:
-            print(f"[FAIL] HTTPS: {response_line}")
+            print(f"[FAIL] HTTPS: '{response_line}'")
             issues.append("HTTPS not responding")
 
     print("-" * 40)

@@ -86,7 +86,7 @@ def create_instance(
         iam_role = "deploy-vm-bedrock"
 
     log(
-        f"Creating instance '{name}' on {p.provider_name} in {p.region} ({p.vm_size})..."
+        f"Creating instance '{name}' on '{p.provider_name}' in '{p.region}' ('{p.vm_size}')..."
     )
     result = p.create_instance(name, p.region, p.vm_size, iam_role=iam_role)
 
@@ -130,11 +130,11 @@ def delete_instance(
         provider = data.get("provider", provider)
         p = get_provider(provider)
     else:
-        log(f"No {name}.instance.json found, looking up from {p.provider_name}...")
+        log(f"No '{name}.instance.json' found, looking up from '{p.provider_name}'...")
         p.validate_auth()
         lookup = p.get_instance_by_name(name)
         if not lookup:
-            error(f"Instance '{name}' not found in {p.provider_name}")
+            error(f"Instance '{name}' not found in '{p.provider_name}'")
         data = {"id": lookup["id"], "ip": lookup["ip"], "provider": p.provider_name}
 
     print("[yellow]Instance to delete:[/yellow]")
@@ -165,11 +165,11 @@ def list_instances(
     p = get_provider(provider, region=region)
 
     if p.provider_name == "aws":
-        log(f"Listing instances in {p.region}...")
+        log(f"Listing instances in '{p.region}'...")
     instances = p.list_instances()
 
     if not instances:
-        log(f"No instances found in {p.region}")
+        log(f"No instances found in '{p.region}'")
         return
 
     max_name = max(len(i["name"]) for i in instances)
@@ -424,7 +424,7 @@ def deploy_nuxt(
 
     ip = data["ip"]
 
-    log(f"Deploying {name} to {ip}")
+    log(f"Deploying '{name}' to '{ip}'")
     print("=" * 50)
 
     sync_nuxt(
@@ -458,7 +458,7 @@ def deploy_nuxt(
     verify_script = f"curl -sI http://localhost:{port} | head -1"
     result = ssh(ip, verify_script, user=ssh_user)
     if "200" not in result:
-        warn(f"App health check returned: {result.strip()}")
+        warn(f"App health check returned: '{result.strip()}'")
 
     print("=" * 50)
     if no_ssl:
@@ -623,7 +623,7 @@ def deploy_fastapi(
         instance_provider = data.get("provider", "digitalocean")
         ssh_user = get_ssh_user(instance_provider)
 
-    log(f"Deploying {name} to {ip}")
+    log(f"Deploying '{name}' to '{ip}'")
     print("=" * 50)
 
     sync_fastapi(
@@ -658,7 +658,7 @@ def deploy_fastapi(
     verify_script = f"curl -sI http://localhost:{port} | head -1"
     result = ssh(ip, verify_script, user=ssh_user)
     if "200" not in result:
-        warn(f"App health check returned: {result.strip()}")
+        warn(f"App health check returned: '{result.strip()}'")
 
     print("=" * 50)
     if no_ssl:
@@ -694,7 +694,7 @@ def get_nameservers(
 
         # Check if we have cached nameservers
         if ns_file.exists():
-            log(f"Loading nameservers from {ns_file}")
+            log(f"Loading nameservers from '{ns_file}'")
             data = json.loads(ns_file.read_text())
             zone_id = data["zone_id"]
             zone_name = data["zone_name"]
@@ -714,14 +714,14 @@ def get_nameservers(
                     break
 
             if not zone_id:
-                log(f"Creating Route53 hosted zone for {domain}...")
+                log(f"Creating Route53 hosted zone for '{domain}'...")
                 create_response = route53.create_hosted_zone(
                     Name=domain,
                     CallerReference=str(int(time.time() * 1000)),
                 )
                 zone_id = create_response["HostedZone"]["Id"]
                 zone_name = create_response["HostedZone"]["Name"]
-                log(f"Created hosted zone: {zone_id}")
+                log(f"Created hosted zone: '{zone_id}'")
 
             zone_response = route53.get_hosted_zone(Id=zone_id)
             nameservers = zone_response["DelegationSet"]["NameServers"]
@@ -735,7 +735,7 @@ def get_nameservers(
                 "nameservers": nameservers,
             }
             ns_file.write_text(json.dumps(data, indent=2))
-            log(f"Saved nameservers to {ns_file}")
+            log(f"Saved nameservers to '{ns_file}'")
 
         print(f"Route53 Hosted Zone: {zone_name}")
         print(f"Zone ID: {zone_id}")

@@ -455,10 +455,10 @@ def deploy_nuxt(
         )
 
     log("Verifying deployment...")
-    verify_script = f"curl -sI http://localhost:{port} | head -1"
+    verify_script = f"curl -s -o /dev/null -w '%{http_code}' http://localhost:{port}"
     result = ssh(ip, verify_script, user=ssh_user)
     if "200" not in result:
-        warn(f"App health check returned: '{result.strip()}'")
+        warn(f"App health check returned HTTP status: {result.strip()}")
 
     print("=" * 50)
     if no_ssl:
@@ -655,10 +655,10 @@ def deploy_fastapi(
         )
 
     log("Verifying deployment...")
-    verify_script = f"curl -sI http://localhost:{port} | head -1"
+    verify_script = f"curl -s -o /dev/null -w '%{http_code}' http://localhost:{port}"
     result = ssh(ip, verify_script, user=ssh_user)
     if "200" not in result:
-        warn(f"App health check returned: '{result.strip()}'")
+        warn(f"App health check returned HTTP status: {result.strip()}")
 
     print("=" * 50)
     if no_ssl:

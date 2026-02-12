@@ -13,7 +13,7 @@ from .server import (
     ssh_script,
     ssh_write_file,
 )
-from .utils import error, get_ssh_user, log
+from .utils import error, log, warn
 
 
 def compute_hash(source: str, exclude: list[str] | None = None) -> str:
@@ -45,7 +45,8 @@ def filter_aws_credentials_from_env(
     """Filter AWS credentials from .env and upload filtered version.
 
     Removes AWS_PROFILE, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY
-    since AWS EC2 instances use IAM roles instead.
+    since AWS EC2 instances use IAM roles instead. Ensures AWS_REGION
+    is present for Bedrock and other AWS services.
 
     :param source_dir: Local source directory path
     :param provider_name: Cloud provider name
@@ -67,13 +68,21 @@ def filter_aws_credentials_from_env(
 
     filtered_lines = []
     filtered_vars = []
+    has_aws_region = False
+    removing_profile = False
 
     for line in lines:
         stripped = line.strip()
-        if any(stripped.startswith(var) for var in aws_vars):
+        # Check if AWS_REGION is already present
+        if stripped.startswith("AWS_REGION="):
+            has_aws_region = True
+            filtered_lines.append(line)
+        elif any(stripped.startswith(var) for var in aws_vars):
             # Extract variable name for logging
             var_name = stripped.split("=")[0]
             filtered_vars.append(var_name)
+            if var_name == "AWS_PROFILE":
+                removing_profile = True
         else:
             filtered_lines.append(line)
 
@@ -81,6 +90,25 @@ def filter_aws_credentials_from_env(
         log(f"  Removed: {', '.join(filtered_vars)}")
     else:
         log("  No AWS credentials found in .env")
+
+    # If we're removing AWS_PROFILE but AWS_REGION is missing, we need to add it
+    if removing_profile and not has_aws_region:
+        # Import here to avoid circular dependency
+        from .providers import AWSProvider
+
+        # Get region from AWS config (may come from profile)
+        aws_config = AWSProvider.get_aws_config(is_raise_exception=False)
+        region = aws_config.get("region_name")
+
+        if region:
+            filtered_lines.append(f"AWS_REGION={region}")
+            log(f"  Added AWS_REGION={region} (from AWS profile configuration)")
+        else:
+            warn(
+                "AWS_PROFILE removed but AWS_REGION not found!\n"
+                "  Bedrock and other AWS services require AWS_REGION.\n"
+                "  Please add AWS_REGION to your .env file."
+            )
 
     # Upload filtered .env file directly (no temp file needed)
     filtered_content = "\n".join(filtered_lines) + "\n"

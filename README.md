@@ -152,6 +152,40 @@ uv run deploy-vm fastapi restart my-server --app-name api
 
 **Priority:** Command-line flags > `.env` file > Built-in defaults
 
+### Application Credentials (.env)
+
+Apps deployed with `deploy-vm` use a `.env` file in the app directory to store credentials and configuration:
+
+- **Location**: `.env` in your app's root directory (e.g., `/path/to/app/.env`)
+- **Purpose**: Stores API keys, secrets, and other credentials needed for your app to work
+- **Deployment**: Automatically uploaded during `deploy` or `sync` operations
+
+**AWS credential handling:**
+
+When deploying to AWS EC2, there is special logic for AWS credentials:
+
+- **`AWS_PROFILE`**: Automatically removed (EC2 instances use IAM roles instead)
+- **`AWS_ACCESS_KEY_ID`** and **`AWS_SECRET_ACCESS_KEY`**: Automatically removed
+- **`AWS_REGION`**: Preserved if present, or auto-added from your AWS profile configuration
+  - Required for Bedrock and other AWS services
+  - Automatically extracted from your local AWS profile when `AWS_PROFILE` is removed
+
+**Example `.env` in your app directory:**
+```bash
+# API credentials
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-proj-...
+
+# AWS region (automatically added if missing when deploying to AWS)
+AWS_REGION=ap-southeast-2
+
+# Other app config
+DATABASE_URL=postgresql://...
+SECRET_KEY=your-secret-key
+```
+
+**Note:** The filtered `.env` (without AWS credentials) is uploaded to your EC2 instance, ensuring secure credential management.
+
 ### Provider-Specific Settings
 
 | Setting    | AWS                                          | DigitalOcean                                    |

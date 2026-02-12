@@ -159,6 +159,11 @@ def _rsync_tar_fallback(
 
 
 def load_instance(name: str) -> dict:
+    """Load instance data from JSON file and migrate legacy format.
+
+    :param name: Instance name (JSON file prefix)
+    :return: Instance data dictionary with apps list
+    """
     path = Path(f"{name}.instance.json")
     if not path.exists():
         error(f"Instance file not found: {path}")
@@ -175,6 +180,11 @@ def load_instance(name: str) -> dict:
 
 
 def save_instance(name: str, data: dict):
+    """Save instance data to JSON file.
+
+    :param name: Instance name (JSON file prefix)
+    :param data: Instance data dictionary to save
+    """
     Path(f"{name}.instance.json").write_text(json.dumps(data, indent=2))
 
 
@@ -193,7 +203,8 @@ def add_app_to_instance(
 ):
     """Add or update app in instance with conflict detection.
 
-    :param instance: Instance data dict
+    :param instance: Instance data dictionary to modify
+    :param app_name: Application name
     :param app_type: App type (nuxt or fastapi)
     :param port: Port number (optional)
     """
@@ -373,24 +384,30 @@ def verify_http(ip: str) -> bool:
     error(f"Cannot connect to server on port 80. Check UFW: ssh deploy@{ip} 'sudo ufw status'")
 
 
-def setup_server(
-    ip: str, *, user: str = "deploy", ssh_user: str = "root", swap_size: str = "4G"
-):
-    log(f"Setting up server at {ip}...")
+def setup_firewall(ip: str, ssh_user: str = "root"):
+    """Configure UFW firewall to allow OpenSSH access.
 
-    script = dedent(f"""
+    :param ip: Server IP address
+    :param ssh_user: SSH user for remote connection
+    """
+    script = dedent("""
         set -e
-        echo "Waiting for cloud-init..."
-        sudo cloud-init status --wait > /dev/null 2>&1 || true
-
-        echo "Installing packages..."
-        sudo apt-get update
-        sudo apt-get install -y curl wget git ufw
-
         echo "Configuring firewall..."
         sudo ufw allow OpenSSH
         sudo ufw --force enable
+    """).strip()
+    ssh_script(ip, script, user=ssh_user)
 
+
+def setup_swap(ip: str, swap_size: str = "4G", ssh_user: str = "root"):
+    """Create and enable swap file if not already present.
+
+    :param ip: Server IP address
+    :param swap_size: Swap file size (e.g., "4G")
+    :param ssh_user: SSH user for remote connection
+    """
+    script = dedent(f"""
+        set -e
         echo "Setting up swap..."
         if ! swapon --show | grep -q swapfile; then
             sudo fallocate -l {swap_size} /swapfile
@@ -399,19 +416,24 @@ def setup_server(
             sudo swapon /swapfile
             echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
         fi
-        echo "Done!"
     """).strip()
-    print(ssh_script(ip, script, user=ssh_user))
+    ssh_script(ip, script, user=ssh_user)
 
-    log(f"Creating user: {user}")
 
+def create_user(ip: str, user: str = "deploy", ssh_user: str = "root"):
+    """Create deploy user with sudo privileges and SSH key access.
+
+    :param ip: Server IP address
+    :param user: Username to create
+    :param ssh_user: SSH user for remote connection
+    """
     auth_keys_path = (
         "~/.ssh/authorized_keys"
         if ssh_user == "root"
         else "/home/ubuntu/.ssh/authorized_keys"
     )
 
-    user_script = dedent(f"""
+    script = dedent(f"""
         set -e
         if id "{user}" &>/dev/null; then
             echo "User {user} already exists"
@@ -428,7 +450,31 @@ def setup_server(
             echo "User {user} created"
         fi
     """).strip()
-    print(ssh_script(ip, user_script, user=ssh_user))
+    ssh_script(ip, script, user=ssh_user)
+
+
+def setup_server(
+    ip: str, *, user: str = "deploy", ssh_user: str = "root", swap_size: str = "4G"
+):
+    log(f"Setting up server at {ip}...")
+
+    script = dedent("""
+        set -e
+        echo "Waiting for cloud-init..."
+        sudo cloud-init status --wait > /dev/null 2>&1 || true
+
+        echo "Installing packages..."
+        sudo apt-get update
+        sudo apt-get install -y curl wget git ufw
+        echo "Done!"
+    """).strip()
+    print(ssh_script(ip, script, user=ssh_user))
+
+    setup_firewall(ip, ssh_user=ssh_user)
+    setup_swap(ip, swap_size=swap_size, ssh_user=ssh_user)
+
+    log(f"Creating user: {user}")
+    create_user(ip, user=user, ssh_user=ssh_user)
     log("Server setup complete")
 
 

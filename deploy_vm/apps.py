@@ -428,6 +428,42 @@ class NuxtApp(BaseApp):
         )
 
 
+def validate_uv_lockfile(source: str):
+    """Validate that uv.lock is in sync with pyproject.toml.
+
+    :param source: Path to source directory
+    :raises SystemExit: If lockfile is out of sync
+    """
+    source_path = Path(source)
+    lockfile = source_path / "uv.lock"
+
+    # If no lockfile exists, uv sync will create one (no --frozen flag used)
+    if not lockfile.exists():
+        return
+
+    # Check if lockfile is in sync using uv lock --check
+    log("Validating uv.lock is in sync with pyproject.toml...")
+    result = subprocess.run(
+        ["uv", "lock", "--check"],
+        cwd=source,
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode != 0:
+        error(
+            "uv.lock is out of sync with pyproject.toml!\n"
+            f"  Location: {source}\n"
+            f"  Error: {result.stderr.strip()}\n\n"
+            "Fix this by running:\n"
+            f"  cd {source}\n"
+            "  uv lock\n\n"
+            "Then redeploy."
+        )
+
+    log("✓ uv.lock is in sync")
+
+
 class FastAPIApp(BaseApp):
     """FastAPI app deployment."""
 
@@ -464,6 +500,8 @@ class FastAPIApp(BaseApp):
 
         if not (Path(source) / "pyproject.toml").exists():
             error(f"pyproject.toml not found in {source}")
+
+        validate_uv_lockfile(source)
 
         log(f"Deploying FastAPI to {self.ip}...")
 

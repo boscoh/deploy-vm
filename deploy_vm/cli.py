@@ -21,6 +21,7 @@ from .apps import FastAPIApp, NuxtApp
 from .providers import ProviderName, get_provider
 from .server import (
     add_app_to_instance,
+    check_instance_reachable,
     ensure_dns_matches,
     ensure_web_firewall,
     get_instance_apps,
@@ -296,6 +297,13 @@ def sync_nuxt(
     instance = resolve_instance(target)
     user = user or instance.get("user", "deploy")
     provider = instance.get("provider", "digitalocean")
+    ip = instance.get("ip")
+
+    ssh_user = get_ssh_user(provider)
+
+    # Check if instance is reachable
+    if not check_instance_reachable(ip, ssh_user):
+        error(f"Instance '{ip}' is not reachable via SSH. Please verify the instance is running and SSH access is configured.")
 
     if not Path(target).exists() or not target.endswith(".json"):
         add_app_to_instance(instance, app_name, "nuxt", port)
@@ -497,9 +505,14 @@ def sync_fastapi(
     instance = resolve_instance(target)
     user = user or instance.get("user", "deploy")
     provider = instance.get("provider", "digitalocean")
+    ip = instance.get("ip")
 
     if ssh_user is None:
         ssh_user = get_ssh_user(provider)
+
+    # Check if instance is reachable
+    if not check_instance_reachable(ip, ssh_user):
+        error(f"Instance '{ip}' is not reachable via SSH. Please verify the instance is running and SSH access is configured.")
 
     if not Path(target).exists() or not target.endswith(".json"):
         add_app_to_instance(instance, app_name, "fastapi", port)

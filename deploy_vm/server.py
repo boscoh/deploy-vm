@@ -27,6 +27,20 @@ DNS_VERIFY_RETRIES = 30
 DNS_VERIFY_DELAY = 10
 
 
+def check_instance_reachable(ip: str, ssh_user: str = "deploy") -> bool:
+    """Quick check if instance is reachable via SSH.
+
+    :param ip: Instance IP address
+    :param ssh_user: SSH user for connection
+    :return: True if reachable, False otherwise
+    """
+    try:
+        ssh(ip, "echo ping", user=ssh_user)
+        return True
+    except Exception:
+        return False
+
+
 def ssh(ip: str, cmd: str, user: str = "deploy", show_output: bool = False) -> str:
     with Connection(ip, user=user, connect_kwargs={"look_for_keys": True}) as c:
         result = c.run(cmd, hide=not show_output, warn=True)

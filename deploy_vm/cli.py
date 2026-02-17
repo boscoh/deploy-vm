@@ -25,6 +25,7 @@ from .server import (
     ensure_dns_matches,
     ensure_web_firewall,
     get_instance_apps,
+    is_valid_ip,
     load_instance,
     resolve_instance,
     resolve_ip,
@@ -294,6 +295,12 @@ def sync_nuxt(
     :param local_build: Build locally instead of on server
     :param force: Force rebuild even if source unchanged
     """
+    # Check if instance file exists (unless target is an IP address)
+    if not is_valid_ip(target):
+        instance_file = Path(f"{target}.instance.json") if not target.endswith(".json") else Path(target)
+        if not instance_file.exists():
+            error(f"Instance file not found: {instance_file}\nCreate an instance first with: deploy-vm instance create {target}")
+
     instance = resolve_instance(target)
     user = user or instance.get("user", "deploy")
     provider = instance.get("provider", "digitalocean")
@@ -305,7 +312,8 @@ def sync_nuxt(
     if not check_instance_reachable(ip, ssh_user):
         error(f"Instance '{ip}' is not reachable via SSH. Please verify the instance is running and SSH access is configured.")
 
-    if not Path(target).exists() or not target.endswith(".json"):
+    # Update instance metadata with app info if needed
+    if "apps" not in instance or not any(a["name"] == app_name for a in instance.get("apps", [])):
         add_app_to_instance(instance, app_name, "nuxt", port)
         save_instance(target, instance)
 
@@ -502,6 +510,12 @@ def sync_fastapi(
     :param force: Force rebuild even if source unchanged
     :return: True if full sync, False if source unchanged
     """
+    # Check if instance file exists (unless target is an IP address)
+    if not is_valid_ip(target):
+        instance_file = Path(f"{target}.instance.json") if not target.endswith(".json") else Path(target)
+        if not instance_file.exists():
+            error(f"Instance file not found: {instance_file}\nCreate an instance first with: deploy-vm instance create {target}")
+
     instance = resolve_instance(target)
     user = user or instance.get("user", "deploy")
     provider = instance.get("provider", "digitalocean")
@@ -514,7 +528,8 @@ def sync_fastapi(
     if not check_instance_reachable(ip, ssh_user):
         error(f"Instance '{ip}' is not reachable via SSH. Please verify the instance is running and SSH access is configured.")
 
-    if not Path(target).exists() or not target.endswith(".json"):
+    # Update instance metadata with app info if needed
+    if "apps" not in instance or not any(a["name"] == app_name for a in instance.get("apps", [])):
         add_app_to_instance(instance, app_name, "fastapi", port)
         save_instance(target, instance)
 

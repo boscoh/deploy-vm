@@ -394,6 +394,9 @@ def deploy_nuxt(
     """Deploy Nuxt app: create instance, setup server, deploy app, configure nginx.
 
     :param vm_size: Instance size (AWS: t3.micro, t3.small, etc. | DO: s-1vcpu-1gb, s-2vcpu-2gb, etc.)
+    :param os_image: OS image name/ID
+    :param swap_size: Swap file size (default: 4G)
+    :param no_ssl: Skip SSL/domain setup, use IP-only access
     :param iam_role: AWS only: IAM role name for instance profile (default: deploy-vm-bedrock)
     """
     if not no_ssl and (not domain or not email):
@@ -476,12 +479,19 @@ def sync_fastapi(
     ssh_user: str | None = None,
     port: int = 8000,
     app_name: str = "fastapi",
-    app_module: str = "app:app",
-    workers: int = 2,
+    command: str | None = None,
     force: bool = False,
 ) -> bool:
     """Sync FastAPI app to server using supervisord.
 
+    :param target: Instance name or path to .instance.json file
+    :param source: Local source directory path
+    :param user: Remote user to run the app as (default: deploy)
+    :param ssh_user: SSH user for remote connection (default: provider-specific)
+    :param port: Port number for the app (default: 8000)
+    :param app_name: Name of the app (default: fastapi)
+    :param command: Full command to run (default: "uv run --no-sync uvicorn app:app --host 0.0.0.0 --port {port} --workers 2")
+    :param force: Force rebuild even if source unchanged
     :return: True if full sync, False if source unchanged
     """
     instance = resolve_instance(target)
@@ -501,8 +511,7 @@ def sync_fastapi(
         user=user,
         app_name=app_name,
         port=port,
-        app_module=app_module,
-        workers=workers,
+        command=command,
     )
     return fastapi.sync(source, force=force)
 
@@ -575,8 +584,7 @@ def deploy_fastapi(
     ssh_user: str | None = None,
     port: int = 8000,
     app_name: str = "fastapi",
-    app_module: str = "app:app",
-    workers: int = 2,
+    command: str | None = None,
     static_subdir: str | None = None,
     provider: ProviderName | None = None,
     region: str | None = None,
@@ -588,7 +596,22 @@ def deploy_fastapi(
 ):
     """Deploy FastAPI app: create instance, setup server, deploy app, configure nginx.
 
+    :param name: Instance name (will create {name}.instance.json)
+    :param source: Local source directory path
+    :param domain: Domain name for SSL setup (required unless --no-ssl)
+    :param email: Email for Let's Encrypt SSL certificate (required unless --no-ssl)
+    :param user: Remote user to run the app as (default: deploy)
+    :param ssh_user: SSH user for remote connection (default: provider-specific)
+    :param port: Port number for the app (default: 8000)
+    :param app_name: Name of the app (default: fastapi)
+    :param command: Full command to run (default: "uv run --no-sync uvicorn app:app --host 0.0.0.0 --port {port} --workers 2")
+    :param static_subdir: Subdirectory for static files to serve directly via nginx
+    :param provider: Cloud provider (aws or digitalocean, default: digitalocean)
+    :param region: Cloud provider region
     :param vm_size: Instance size (AWS: t3.micro, t3.small, etc. | DO: s-1vcpu-1gb, s-2vcpu-2gb, etc.)
+    :param os_image: OS image name/ID
+    :param swap_size: Swap file size (default: 4G)
+    :param no_ssl: Skip SSL/domain setup, use IP-only access
     :param iam_role: AWS only: IAM role name for instance profile (default: deploy-vm-bedrock)
     """
     if not no_ssl and (not domain or not email):
@@ -632,8 +655,7 @@ def deploy_fastapi(
         ssh_user=ssh_user,
         port=port,
         app_name=app_name,
-        app_module=app_module,
-        workers=workers,
+        command=command,
     )
 
     ensure_web_firewall(ip, ssh_user=ssh_user)

@@ -16,25 +16,6 @@ from .server import (
 from .utils import error, log, warn
 
 
-def compute_hash(source: str, exclude: list[str] | None = None) -> str:
-    """Compute MD5 hash of source directory.
-
-    :param source: Path to source directory
-    :param exclude: List of patterns to exclude
-    :return: MD5 hash as hex string
-    """
-    source_path = Path(source)
-    if exclude is None:
-        exclude = [".git"]
-
-    hasher = hashlib.md5()
-    for f in sorted(source_path.rglob("*")):
-        if f.is_file() and not any(ex in str(f) for ex in exclude):
-            hasher.update(str(f.relative_to(source_path)).encode())
-            hasher.update(f.read_bytes())
-    return hasher.hexdigest()
-
-
 def filter_aws_credentials_from_env(
     source_dir: str,
     provider_name: str,
@@ -139,7 +120,16 @@ class BaseApp:
         self, local_path: str, exclude: list[str] | None = None
     ) -> str:
         """Compute hash of local source directory."""
-        return compute_hash(local_path, exclude)
+        source_path = Path(local_path)
+        if exclude is None:
+            exclude = [".git"]
+
+        hasher = hashlib.md5()
+        for f in sorted(source_path.rglob("*")):
+            if f.is_file() and not any(ex in str(f) for ex in exclude):
+                hasher.update(str(f.relative_to(source_path)).encode())
+                hasher.update(f.read_bytes())
+        return hasher.hexdigest()
 
     def select_app(self, app_type: str, app_name: str | None = None) -> dict:
         """Select app from instance data.
@@ -475,15 +465,13 @@ class FastAPIApp(BaseApp):
         user: str,
         app_name: str = "fastapi",
         port: int = 8000,
-        app_module: str = "app:app",
-        workers: int = 2,
+        command: str | None = None,
     ):
         super().__init__(instance_data, provider_name)
         self.user = user
         self.app_name = app_name
         self.port = port
-        self.app_module = app_module
-        self.workers = workers
+        self.command = command or f"uv run --no-sync uvicorn app:app --host 0.0.0.0 --port {port} --workers 2"
         self.app_dir = f"/home/{user}/{app_name}"
 
     def sync(self, source: str, *, force: bool = False) -> bool:
@@ -579,10 +567,14 @@ class FastAPIApp(BaseApp):
         ssh_script(self.ip, venv_script, user=self.ssh_user)
 
         log("Configuring supervisord...")
+        # Validate command starts with 'uv'
+        if not self.command.strip().startswith("uv "):
+            error(f"Command must start with 'uv': {self.command}")
+
         supervisor_config = dedent(f"""
             [program:{self.app_name}]
             directory=/home/{self.user}/{self.app_name}
-            command=/home/{self.user}/{self.app_name}/.venv/bin/uvicorn {self.app_module} --host 0.0.0.0 --port {self.port} --workers {self.workers}
+            command={self.command}
             user={self.user}
             autostart=true
             autorestart=true
@@ -590,7 +582,7 @@ class FastAPIApp(BaseApp):
             killasgroup=true
             stderr_logfile=/var/log/{self.app_name}/error.log
             stdout_logfile=/var/log/{self.app_name}/access.log
-            environment=PATH="/home/{self.user}/{self.app_name}/.venv/bin:/home/{self.user}/.local/bin"
+            environment=PATH="/home/{self.user}/.local/bin:/usr/local/bin:/usr/bin:/bin"
         """).strip()
         ssh_write_file(
             self.ip,

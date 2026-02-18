@@ -5,7 +5,7 @@ Python CLI for deploying web applications to cloud providers (DigitalOcean and A
 ## Installation
 
 ```bash
-uv tool install deploy-vm
+uv tool install deployvm
 ```
 
 ## Quick Start

@@ -642,6 +642,13 @@ def show_supervisor_logs(
     ssh_user: str | None = None,
     lines: int = 50,
 ):
+    """View supervisord logs for FastAPI apps.
+
+    :param target: Instance name or IP address
+    :param app_name: App name (required if multiple apps exist on instance)
+    :param ssh_user: SSH user for remote connection
+    :param lines: Number of lines to show (default: 50)
+    """
     instance = resolve_instance(target)
     provider = instance.get("provider", "digitalocean")
 

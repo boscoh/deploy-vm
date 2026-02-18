@@ -137,6 +137,36 @@ When deploying to AWS EC2, `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, and `AWS_SECRET_A
 | **DNS**      | Route53 (auto-created)                     | DigitalOcean nameservers required             |
 | **Auth**     | `aws configure`                            | `doctl auth init`                             |
 
+## AWS Infrastructure Setup
+
+When creating an EC2 instance, the script automatically handles all required AWS infrastructure:
+
+**VPC**
+- Checks for an existing VPC with subnets, an attached internet gateway, and a route table with a route to the internet gateway
+- Creates a default VPC if none exists in the region
+
+**Security group**
+- Creates a `deploy-vm-web` security group (once per region) with:
+  - SSH (port 22) restricted to your current public IP
+  - HTTP (port 80) open to all
+  - HTTPS (port 443) open to all
+- Reuses the existing group on subsequent deploys
+
+**SSH key pair**
+- Uploads your local SSH public key (`~/.ssh/id_ed25519.pub` etc.) to EC2 if not already registered
+
+**AMI**
+- Finds the latest Ubuntu 22.04 LTS AMI from Canonical for your region
+
+**IAM role and instance profile** (when Bedrock access is needed)
+- Creates an IAM role with EC2 trust policy and `AmazonBedrockFullAccess` managed policy
+- Creates an EC2 instance profile with the same name and attaches the role
+- Waits for IAM propagation before launching the instance
+
+**Route53 DNS** (when `--domain` is provided)
+- `dns nameservers` creates a hosted zone for your domain if one doesn't exist, then returns the AWS nameservers to configure at your registrar
+- During deploy, creates or upserts A records for `domain` and `www.domain` pointing to the instance IP
+
 ## AWS Bedrock Access
 
 EC2 instances automatically get Bedrock access via IAM roles:

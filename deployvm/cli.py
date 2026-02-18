@@ -121,7 +121,12 @@ def create_instance(
 def delete_instance(
     name: str, *, provider: ProviderName | None = None, force: bool = False
 ):
-    """Delete instance."""
+    """Delete cloud instance and local instance file.
+
+    :param name: Instance name to delete
+    :param provider: Cloud provider (default: digitalocean)
+    :param force: Skip confirmation prompt
+    """
     import json
 
     instance_file = Path(f"{name}.instance.json")
@@ -164,6 +169,11 @@ def list_instances(
     provider: ProviderName | None = None,
     region: str | None = None,
 ):
+    """List all instances in the specified region.
+
+    :param provider: Cloud provider (default: digitalocean)
+    :param region: Cloud region (default: provider-specific)
+    """
     p = get_provider(provider, region=region)
 
     if p.provider_name == "aws":
@@ -193,6 +203,10 @@ def list_instances(
 
 @instance_app.command(name="apps")
 def list_instance_apps(target: str):
+    """List apps deployed on the specified instance.
+
+    :param target: Instance name or IP address
+    """
     instance = resolve_instance(target)
     apps = get_instance_apps(instance)
 
@@ -247,7 +261,13 @@ def nginx_ip_command(
     static_dir: str | None = None,
     ssh_user: str = "deploy",
 ):
-    """Setup nginx for IP-only access (no SSL)."""
+    """Setup nginx for IP-only access (no SSL certificate).
+
+    :param target: Instance name or IP address
+    :param port: Application port (default: 3000)
+    :param static_dir: Static files directory to serve directly
+    :param ssh_user: SSH user for remote connection
+    """
     ip = resolve_ip(target)
     setup_nginx_ip(ip, port=port, static_dir=static_dir, ssh_user=ssh_user)
 
@@ -264,7 +284,17 @@ def nginx_ssl_command(
     ssh_user: str = "deploy",
     provider: ProviderName = "digitalocean",
 ):
-    """Setup nginx and SSL certificate."""
+    """Setup nginx with SSL certificate using Let's Encrypt.
+
+    :param target: Instance name or IP address
+    :param domain: Domain name for SSL certificate
+    :param email: Email for Let's Encrypt registration
+    :param port: Application port (default: 3000)
+    :param static_dir: Static files directory to serve directly
+    :param skip_dns: Skip DNS validation check
+    :param ssh_user: SSH user for remote connection
+    :param provider: Cloud provider for DNS validation
+    """
     ip = resolve_ip(target)
     setup_nginx_ssl(
         ip,
@@ -335,6 +365,12 @@ def restart_pm2(
     user: str | None = None,
     app_name: str | None = None,
 ):
+    """Restart Nuxt app using PM2.
+
+    :param target: Instance name or IP address
+    :param user: App user (reads from instance.json if not specified)
+    :param app_name: PM2 app name (required if multiple apps exist on instance)
+    """
     instance = resolve_instance(target)
     user = user or instance.get("user", "deploy")
     provider = instance.get("provider", "digitalocean")
@@ -350,6 +386,11 @@ def restart_pm2(
 
 @nuxt_app.command(name="status")
 def show_pm2_status(target: str, *, user: str | None = None):
+    """Show PM2 status for Nuxt apps.
+
+    :param target: Instance name or IP address
+    :param user: App user (reads from instance.json if not specified)
+    """
     instance = resolve_instance(target)
     user = user or instance.get("user", "deploy")
     provider = instance.get("provider", "digitalocean")
@@ -553,6 +594,12 @@ def sync_fastapi(
 def restart_supervisor(
     target: str, *, app_name: str | None = None, ssh_user: str | None = None
 ):
+    """Restart FastAPI app using supervisord.
+
+    :param target: Instance name or IP address
+    :param app_name: App name (required if multiple apps exist on instance)
+    :param ssh_user: SSH user for remote connection
+    """
     instance = resolve_instance(target)
     provider = instance.get("provider", "digitalocean")
 
@@ -571,6 +618,11 @@ def restart_supervisor(
 
 @fastapi_app.command(name="status")
 def show_supervisor_status(target: str, *, ssh_user: str | None = None):
+    """Show supervisord status for FastAPI apps.
+
+    :param target: Instance name or IP address
+    :param ssh_user: SSH user for remote connection
+    """
     instance = resolve_instance(target)
     provider = instance.get("provider", "digitalocean")
 

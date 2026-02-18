@@ -313,6 +313,7 @@ def sync_nuxt(
     target: str,
     source: str,
     *,
+    app_name: str | None = None,
     local_build: bool = True,
     force: bool = False,
     node_version: int = 20,
@@ -324,6 +325,7 @@ def sync_nuxt(
 
     :param target: Instance name or IP address
     :param source: Local source directory path
+    :param app_name: App name (required if multiple apps exist on instance)
     :param local_build: Build locally instead of on server
     :param force: Force rebuild even if source unchanged
     :param node_version: Node.js version to use (default: 20)
@@ -347,7 +349,7 @@ def sync_nuxt(
 
     apps = [a for a in get_instance_apps(instance) if a["type"] == "nuxt"]
     fallback = target if not is_valid_ip(target) else "nuxt"
-    app_name = resolve_app_name(apps, "Nuxt", None, fallback)
+    app_name = resolve_app_name(apps, "Nuxt", app_name, fallback)
     app_data = next((a for a in apps if a["name"] == app_name), {})
     port = app_data.get("port", 3000)
 
@@ -553,6 +555,7 @@ def sync_fastapi(
     source: str,
     command: str,
     *,
+    app_name: str | None = None,
     force: bool = False,
 ) -> bool:
     """Sync FastAPI app to existing server.
@@ -563,6 +566,7 @@ def sync_fastapi(
     :param target: Instance name or path to .instance.json file
     :param source: Local source directory path
     :param command: Command to run (must start with "uv", e.g., "uv run --no-sync uvicorn app:app --host 0.0.0.0 --port 8000 --workers 2")
+    :param app_name: App name (required if multiple apps exist on instance)
     :param force: Force rebuild even if source unchanged
     :return: True if full sync, False if source unchanged
     """
@@ -585,7 +589,7 @@ def sync_fastapi(
 
     apps = [a for a in get_instance_apps(instance) if a["type"] == "fastapi"]
     fallback = target if not is_valid_ip(target) else "fastapi"
-    app_name = resolve_app_name(apps, "FastAPI", None, fallback)
+    app_name = resolve_app_name(apps, "FastAPI", app_name, fallback)
     app_data = next((a for a in apps if a["name"] == app_name), {})
     port = app_data.get("port", 8000)
 

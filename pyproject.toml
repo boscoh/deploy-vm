@@ -1,5 +1,5 @@
 [project]
-name = "deploy-vm"
+name = "deployvm"
 version = "0.1.3"
 requires-python = ">=3.10"
 readme = {file = "README.md", content-type = "text/markdown"}
@@ -15,10 +15,10 @@ dependencies = [
 ]
 
 [project.scripts]
-deploy-vm = "deploy_vm.cli:app"
+deployvm = "deployvm.cli:app"
 
 [project.urls]
-PyPI = "https://pypi.org/project/deploy-vm/"
+PyPI = "https://pypi.org/project/deployvm/"
 
 [build-system]
 requires = ["hatchling"]

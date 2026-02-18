@@ -515,7 +515,7 @@ def ensure_web_firewall(ip: str, ssh_user: str = "deploy"):
 def ensure_dns_matches(
     domain: str, expected_ip: str, provider_name: ProviderName = "digitalocean"
 ) -> bool:
-    from deploy_vm.providers import get_provider
+    from deployvm.providers import get_provider
 
     current_ip = resolve_dns_a(domain) or ""
 

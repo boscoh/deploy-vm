@@ -435,13 +435,18 @@ def deploy_nuxt(
 
     data = load_instance(name)
 
+    ip = data["ip"]
+    provider_name = data.get("provider", "digitalocean")
+    nuxt_ssh_user = get_ssh_user(provider_name)
+
+    if not check_instance_reachable(ip, nuxt_ssh_user):
+        error(f"Instance '{name}' at '{ip}' is not reachable via SSH. Verify the instance exists and is running.")
+
     if "user" not in data or data["user"] != user:
         data["user"] = user
 
     add_app_to_instance(data, app_name, "nuxt", port)
     save_instance(name, data)
-
-    ip = data["ip"]
 
     log(f"Deploying '{name}' to '{ip}'")
     print("=" * 50)
@@ -662,17 +667,20 @@ def deploy_fastapi(
 
     data = load_instance(name)
 
-    if "user" not in data or data["user"] != user:
-        data["user"] = user
-
-    add_app_to_instance(data, app_name, "fastapi", port)
-    save_instance(name, data)
-
     ip = data["ip"]
 
     if ssh_user is None:
         instance_provider = data.get("provider", "digitalocean")
         ssh_user = get_ssh_user(instance_provider)
+
+    if not check_instance_reachable(ip, ssh_user):
+        error(f"Instance '{name}' at '{ip}' is not reachable via SSH. Verify the instance exists and is running.")
+
+    if "user" not in data or data["user"] != user:
+        data["user"] = user
+
+    add_app_to_instance(data, app_name, "fastapi", port)
+    save_instance(name, data)
 
     log(f"Deploying '{name}' to '{ip}'")
     print("=" * 50)

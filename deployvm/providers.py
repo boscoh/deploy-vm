@@ -672,11 +672,24 @@ class AWSProvider:
 
                 vpcs = ec2.describe_vpcs()["Vpcs"]
                 if not vpcs:
-                    error(
-                        "No VPC found in this region. Please create a VPC first:\n"
-                        "  aws ec2 create-default-vpc --region "
-                        + self.aws_config.get("region_name", "ap-southeast-2")
-                    )
+                    log("No VPC found. Creating default VPC...")
+                    try:
+                        vpc_response = ec2.create_default_vpc()
+                        vpc_id = vpc_response["Vpc"]["VpcId"]
+                        log(f"✓ Created default VPC: {vpc_id}")
+
+                        # Wait a moment for VPC to be fully ready
+                        time.sleep(2)
+
+                        # Refresh VPC list
+                        vpcs = ec2.describe_vpcs()["Vpcs"]
+                    except ClientError as vpc_error:
+                        error(
+                            f"Failed to create default VPC: {vpc_error}\n"
+                            "Please create a VPC manually:\n"
+                            "  aws ec2 create-default-vpc --region "
+                            + self.aws_config.get("region_name", "ap-southeast-2")
+                        )
 
                 default_vpc = next((v for v in vpcs if v.get("IsDefault")), None)
                 vpc_id = default_vpc["VpcId"] if default_vpc else vpcs[0]["VpcId"]

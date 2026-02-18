@@ -444,7 +444,6 @@ def deploy_nuxt(
     domain: str | None = None,
     email: str | None = None,
     user: str = "deploy",
-    ssh_user: str = "deploy",
     port: int = 3000,
     app_name: str = "nuxt",
     provider: ProviderName = "digitalocean",
@@ -467,7 +466,6 @@ def deploy_nuxt(
     :param domain: Domain name for SSL setup (required unless --no-ssl)
     :param email: Email for Let's Encrypt SSL certificate (required unless --no-ssl)
     :param user: Remote user to run the app as (default: deploy)
-    :param ssh_user: SSH user for remote connection (default: deploy)
     :param port: Application port (default: 3000)
     :param app_name: Name of the app (default: nuxt)
     :param provider: Cloud provider (aws or digitalocean, default: digitalocean)
@@ -525,13 +523,13 @@ def deploy_nuxt(
         node_version=node_version,
     )
 
-    ensure_web_firewall(ip, ssh_user=ssh_user)
+    ensure_web_firewall(ip, ssh_user=nuxt_ssh_user)
     if not no_ssl:
         ensure_dns_matches(domain, ip, provider_name=data["provider"])
 
     nuxt_static_dir = f"/home/{user}/{app_name}/.output/public"
     if no_ssl:
-        setup_nginx_ip(ip, port=port, static_dir=nuxt_static_dir, ssh_user=ssh_user)
+        setup_nginx_ip(ip, port=port, static_dir=nuxt_static_dir, ssh_user=nuxt_ssh_user)
     else:
         setup_nginx_ssl(
             ip,
@@ -539,13 +537,13 @@ def deploy_nuxt(
             email,
             port=port,
             static_dir=nuxt_static_dir,
-            ssh_user=ssh_user,
+            ssh_user=nuxt_ssh_user,
             provider_name=data["provider"],
         )
 
     log("Verifying deployment...")
     verify_script = f"curl -s -o /dev/null -w '%{{http_code}}' http://localhost:{port}"
-    result = ssh(ip, verify_script, user=ssh_user)
+    result = ssh(ip, verify_script, user=nuxt_ssh_user)
     if "200" not in result:
         warn(f"App health check returned HTTP status: {result.strip()}")
 
@@ -563,7 +561,6 @@ def sync_fastapi(
     command: str,
     *,
     user: str | None = None,
-    ssh_user: str | None = None,
     port: int = 8000,
     app_name: str = "fastapi",
     force: bool = False,
@@ -577,7 +574,6 @@ def sync_fastapi(
     :param source: Local source directory path
     :param command: Command to run (must start with "uv", e.g., "uv run --no-sync uvicorn app:app --host 0.0.0.0 --port 8000 --workers 2")
     :param user: Remote user to run the app as (default: deploy)
-    :param ssh_user: SSH user for remote connection (default: provider-specific)
     :param port: Port number for the app (default: 8000)
     :param app_name: Name of the app (default: fastapi)
     :param force: Force rebuild even if source unchanged
@@ -594,8 +590,7 @@ def sync_fastapi(
     provider = instance.get("provider", "digitalocean")
     ip = instance.get("ip")
 
-    if ssh_user is None:
-        ssh_user = get_ssh_user(provider)
+    ssh_user = get_ssh_user(provider)
 
     # Check if instance is reachable
     if not check_instance_reachable(ip, ssh_user):
@@ -619,19 +614,15 @@ def sync_fastapi(
 
 @fastapi_app.command(name="restart")
 def restart_supervisor(
-    target: str, *, app_name: str | None = None, ssh_user: str | None = None
+    target: str, *, app_name: str | None = None
 ):
     """Restart FastAPI app using supervisord.
 
     :param target: Instance name or IP address
     :param app_name: App name (required if multiple apps exist on instance)
-    :param ssh_user: SSH user for remote connection
     """
     instance = resolve_instance(target)
     provider = instance.get("provider", "digitalocean")
-
-    if ssh_user is None:
-        ssh_user = get_ssh_user(provider)
 
     apps = [app for app in get_instance_apps(instance) if app["type"] == "fastapi"]
 
@@ -644,17 +635,13 @@ def restart_supervisor(
 
 
 @fastapi_app.command(name="status")
-def show_supervisor_status(target: str, *, ssh_user: str | None = None):
+def show_supervisor_status(target: str):
     """Show supervisord status for FastAPI apps.
 
     :param target: Instance name or IP address
-    :param ssh_user: SSH user for remote connection
     """
     instance = resolve_instance(target)
     provider = instance.get("provider", "digitalocean")
-
-    if ssh_user is None:
-        ssh_user = get_ssh_user(provider)
 
     user = instance.get("user", "deploy")
     fastapi = FastAPIApp(instance, provider, user=user)
@@ -666,21 +653,16 @@ def show_supervisor_logs(
     target: str,
     *,
     app_name: str | None = None,
-    ssh_user: str | None = None,
     lines: int = 50,
 ):
     """View supervisord logs for FastAPI apps.
 
     :param target: Instance name or IP address
     :param app_name: App name (required if multiple apps exist on instance)
-    :param ssh_user: SSH user for remote connection
     :param lines: Number of lines to show (default: 50)
     """
     instance = resolve_instance(target)
     provider = instance.get("provider", "digitalocean")
-
-    if ssh_user is None:
-        ssh_user = get_ssh_user(provider)
 
     apps = [app for app in get_instance_apps(instance) if app["type"] == "fastapi"]
 
@@ -701,7 +683,6 @@ def deploy_fastapi(
     domain: str | None = None,
     email: str | None = None,
     user: str = "deploy",
-    ssh_user: str | None = None,
     port: int = 8000,
     app_name: str = "fastapi",
     static_subdir: str | None = None,
@@ -724,7 +705,6 @@ def deploy_fastapi(
     :param domain: Domain name for SSL setup (required unless --no-ssl)
     :param email: Email for Let's Encrypt SSL certificate (required unless --no-ssl)
     :param user: Remote user to run the app as (default: deploy)
-    :param ssh_user: SSH user for remote connection (default: provider-specific)
     :param port: Port number for the app (default: 8000)
     :param app_name: Name of the app (default: fastapi)
     :param static_subdir: Subdirectory for static files to serve directly via nginx
@@ -757,10 +737,7 @@ def deploy_fastapi(
     data = load_instance(name)
 
     ip = data["ip"]
-
-    if ssh_user is None:
-        instance_provider = data.get("provider", "digitalocean")
-        ssh_user = get_ssh_user(instance_provider)
+    ssh_user = get_ssh_user(data.get("provider", "digitalocean"))
 
     if not check_instance_reachable(ip, ssh_user):
         error(f"Instance '{name}' at '{ip}' is not reachable via SSH. Verify the instance exists and is running.")
@@ -777,7 +754,6 @@ def deploy_fastapi(
     sync_fastapi(
         name,
         source,
-        ssh_user=ssh_user,
         port=port,
         app_name=app_name,
         command=command,

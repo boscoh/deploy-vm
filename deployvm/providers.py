@@ -560,6 +560,60 @@ class AWSProvider:
 
         return key_name
 
+    def _update_ssh_cidr(self, ec2, sg_id: str) -> None:
+        """Update SSH ingress rule to the current public IP if it has changed.
+
+        :param ec2: Boto3 EC2 client instance
+        :param sg_id: Security group ID to update
+        """
+        my_ip = self._get_my_ip()
+        if not my_ip:
+            return
+
+        new_cidr = f"{my_ip}/32"
+
+        sg = ec2.describe_security_groups(GroupIds=[sg_id])["SecurityGroups"][0]
+        ssh_rules = [
+            r for r in sg["IpPermissions"]
+            if r.get("IpProtocol") == "tcp"
+            and r.get("FromPort") == 22
+            and r.get("ToPort") == 22
+        ]
+
+        existing_cidrs = [
+            ip_range["CidrIp"]
+            for rule in ssh_rules
+            for ip_range in rule.get("IpRanges", [])
+        ]
+
+        if existing_cidrs == [new_cidr]:
+            return
+
+        if ssh_rules:
+            ec2.revoke_security_group_ingress(GroupId=sg_id, IpPermissions=ssh_rules)
+
+        ec2.authorize_security_group_ingress(
+            GroupId=sg_id,
+            IpPermissions=[{
+                "IpProtocol": "tcp",
+                "FromPort": 22,
+                "ToPort": 22,
+                "IpRanges": [{"CidrIp": new_cidr, "Description": "SSH access"}],
+            }],
+        )
+        log(f"Updated SSH access to '{new_cidr}'")
+
+    def update_ssh_ip(self) -> None:
+        """Update the deploy-vm-web security group SSH rule to the current public IP."""
+        ec2 = self._get_ec2_client()
+        response = ec2.describe_security_groups(
+            Filters=[{"Name": "group-name", "Values": ["deploy-vm-web"]}]
+        )
+        if not response["SecurityGroups"]:
+            error("No 'deploy-vm-web' security group found")
+        sg_id = response["SecurityGroups"][0]["GroupId"]
+        self._update_ssh_cidr(ec2, sg_id)
+
     def _ensure_security_group(self, ec2) -> str:
         """Ensure security group exists in AWS, create if needed.
 
@@ -578,6 +632,7 @@ class AWSProvider:
             if response["SecurityGroups"]:
                 sg_id = response["SecurityGroups"][0]["GroupId"]
                 log(f"Using existing security group: '{sg_name}'")
+                self._update_ssh_cidr(ec2, sg_id)
             else:
                 raise ClientError(
                     {"Error": {"Code": "InvalidGroup.NotFound"}},

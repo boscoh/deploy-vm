@@ -168,6 +168,24 @@ def delete_instance(
     log("Instance deleted")
 
 
+@instance_app.command(name="update-ssh-ip")
+def update_ssh_ip(name: str):
+    """Update the AWS security group SSH rule to the current public IP.
+
+    :param name: Instance name
+    """
+    from .providers import AWSProvider
+
+    instance = load_instance(name)
+    check_instance_auth(instance)
+
+    if instance.get("provider") != "aws":
+        error("update-ssh-ip is only supported for AWS instances")
+
+    p = AWSProvider(aws_profile=instance.get("aws_profile"), region=instance.get("region"))
+    p.update_ssh_ip()
+
+
 @instance_app.command(name="list")
 def list_instances(
     *,

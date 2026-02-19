@@ -669,7 +669,7 @@ def setup_nginx_ssl(
     ssh_script(
         ip,
         f"sudo ln -sf /etc/nginx/sites-available/{domain} /etc/nginx/sites-enabled/ && "
-        f"sudo rm -f /etc/nginx/sites-enabled/default && sudo nginx -t && sudo systemctl reload nginx",
+        f"sudo nginx -t && sudo systemctl reload nginx",
         user=ssh_user,
     )
 

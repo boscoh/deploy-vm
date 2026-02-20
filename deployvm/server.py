@@ -661,6 +661,13 @@ def setup_nginx_ssl(
     if not skip_dns:
         ensure_dns_matches(domain, ip, provider_name=provider_name, aws_profile=aws_profile)
 
+    # Remove default site so it doesn't conflict with domain-based config
+    ssh_script(
+        ip,
+        "sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true",
+        user=ssh_user,
+    )
+
     server_block = generate_nginx_server_block(
         f"{domain} www.{domain}", port, static_dir
     )

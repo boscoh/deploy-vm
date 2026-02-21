@@ -23,3 +23,10 @@ PyPI = "https://pypi.org/project/deployvm/"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "httpx>=0.28.0",
+    "pytest>=8.0.0",
+    "pytest-timeout>=2.3.0",
+]

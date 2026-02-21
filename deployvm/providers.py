@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 from .utils import error, log, run_cmd, run_cmd_json, warn
 
-ProviderName = Literal["digitalocean", "aws"]
+ProviderName = Literal["digitalocean", "aws", "vultr"]
 
 
 def get_local_ssh_key() -> tuple[str, str]:
@@ -59,6 +59,26 @@ class Provider(Protocol):
     def setup_dns(self, domain: str, ip: str) -> None: ...
 
     def cleanup_resources(self, *, dry_run: bool = True) -> None: ...
+
+
+def _get_my_ip() -> str | None:
+    """Get the current public IP address for SSH restriction.
+
+    Queries an external service to determine the public IP address of the
+    current machine. Falls back to None if the service is unreachable.
+
+    :return: Public IP address string, or None if detection fails
+    """
+    try:
+        import urllib.request
+
+        response = urllib.request.urlopen("https://api.ipify.org", timeout=5)
+        return response.read().decode("utf8")
+    except Exception:
+        log(
+            "[WARN] Could not determine your public IP, using 0.0.0.0/0 for SSH access"
+        )
+        return None
 
 
 class DigitalOceanProvider:
@@ -498,24 +518,12 @@ class AWSProvider:
 
         return True, None
 
-    def _get_my_ip(self) -> str:
+    def _get_my_ip(self) -> str | None:
         """Get the current public IP address for SSH restriction.
-
-        Queries an external service to determine the public IP address of the
-        current machine. Falls back to None if the service is unreachable.
 
         :return: Public IP address string, or None if detection fails
         """
-        try:
-            import urllib.request
-
-            response = urllib.request.urlopen("https://api.ipify.org", timeout=5)
-            return response.read().decode("utf8")
-        except Exception:
-            log(
-                "[WARN] Could not determine your public IP, using 0.0.0.0/0 for SSH access"
-            )
-            return None
+        return _get_my_ip()
 
     def _find_ami(self, ec2_client) -> str:
         response = ec2_client.describe_images(
@@ -1087,6 +1095,356 @@ class AWSProvider:
             log("\nRun with --no-dry-run to actually delete resources")
 
 
+class VultrProvider:
+    """Cloud provider implementation for Vultr VPS."""
+
+    VM_SIZES = [
+        "vc2-1c-1gb",
+        "vc2-1c-2gb",
+        "vc2-2c-4gb",
+        "vc2-4c-8gb",
+        "vc2-6c-16gb",
+    ]
+
+    REGIONS = [
+        "syd",
+        "sgp",
+        "ewr",
+        "ord",
+        "lax",
+        "dfw",
+        "sea",
+        "lhr",
+        "fra",
+        "ams",
+        "tor",
+        "blr",
+    ]
+
+    # Ubuntu 24.04 LTS
+    DEFAULT_OS_ID = 2284
+
+    def __init__(
+        self,
+        os_image: str | None = None,
+        region: str | None = None,
+        vm_size: str | None = None,
+    ):
+        self.provider_name: ProviderName = "vultr"
+        self.region = region or "syd"
+        self.os_id = int(os_image) if os_image else self.DEFAULT_OS_ID
+        self.vm_size = vm_size or "vc2-1c-1gb"
+
+        if self.vm_size not in self.VM_SIZES:
+            error(
+                f"Invalid Vultr VM size: '{self.vm_size}'\n"
+                f"Valid sizes: '{', '.join(self.VM_SIZES)}'"
+            )
+
+    def validate_auth(self) -> None:
+        """Validate Vultr authentication via vultr-cli.
+
+        :raises SystemExit: If authentication validation fails
+        """
+        result = subprocess.run(
+            ["vultr-cli", "version"], capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            error("vultr-cli not authenticated or not installed. Check your API key.")
+
+    def instance_exists(self, name: str) -> bool:
+        """Check if an instance with the given label exists.
+
+        :param name: The instance label to check
+        :return: True if instance exists, False otherwise
+        """
+        result = run_cmd_json("vultr-cli", "instance", "list")
+        instances = result.get("instances") or []
+        return any(i["label"] == name for i in instances)
+
+    def get_instance_by_name(self, name: str) -> dict | None:
+        """Get instance info by label.
+
+        :param name: The instance label to find
+        :return: Dictionary with 'id' and 'ip' keys, or None if not found
+        """
+        result = run_cmd_json("vultr-cli", "instance", "list")
+        instances = result.get("instances") or []
+        inst = next((i for i in instances if i["label"] == name), None)
+        if not inst:
+            return None
+        return {"id": inst["id"], "ip": inst["main_ip"]}
+
+    def _ensure_ssh_key(self) -> str:
+        """Ensure SSH key exists in Vultr, upload if needed. Matches by content.
+
+        :return: Vultr SSH key ID
+        :raises SystemExit: If key cannot be uploaded or found
+        """
+        key_content, fingerprint = get_local_ssh_key()
+        result = run_cmd_json("vultr-cli", "ssh-key", "list")
+        keys = result.get("ssh_keys") or []
+
+        match = next(
+            (k for k in keys if k["ssh_key"].strip() == key_content.strip()), None
+        )
+        if match:
+            log(f"Found matching SSH key in Vultr: '{match['name']}'")
+            return match["id"]
+
+        key_name = f"deploy-vm-{fingerprint[-8:]}"
+        log("Uploading SSH key to Vultr...")
+        run_cmd(
+            "vultr-cli", "ssh-key", "create",
+            "--name", key_name,
+            "--key", key_content,
+        )
+
+        result = run_cmd_json("vultr-cli", "ssh-key", "list")
+        keys = result.get("ssh_keys") or []
+        uploaded = next(
+            (k for k in keys if k["ssh_key"].strip() == key_content.strip()), None
+        )
+        if not uploaded:
+            error("Failed to upload SSH key to Vultr")
+        log(f"Uploaded SSH key: '{key_name}'")
+        return uploaded["id"]
+
+    def _ensure_firewall_group(self) -> str:
+        """Ensure firewall group exists with correct rules; update SSH CIDR if changed.
+
+        :return: Vultr firewall group ID
+        :raises SystemExit: If firewall group cannot be created or rules cannot be set
+        """
+        group_name = "deploy-vm-web"
+
+        result = run_cmd_json("vultr-cli", "firewall", "group", "list")
+        groups = result.get("firewall-groups") or []
+        group = next(
+            (g for g in groups if g.get("description") == group_name), None
+        )
+
+        if group:
+            group_id = group["id"]
+            log(f"Using existing firewall group: '{group_name}'")
+        else:
+            log(f"Creating firewall group: '{group_name}'...")
+            run_cmd(
+                "vultr-cli", "firewall", "group", "create",
+                "--description", group_name,
+            )
+            result = run_cmd_json("vultr-cli", "firewall", "group", "list")
+            groups = result.get("firewall-groups") or []
+            group = next(
+                (g for g in groups if g.get("description") == group_name), None
+            )
+            if not group:
+                error(f"Failed to create firewall group '{group_name}'")
+            group_id = group["id"]
+            log(f"Created firewall group: '{group_name}' ('{group_id}')")
+
+        rules_result = run_cmd_json("vultr-cli", "firewall", "rule", "list", group_id)
+        rules = rules_result.get("firewall_rules") or []
+
+        def _has_port_rule(port: str) -> bool:
+            return any(str(r.get("port")) == port for r in rules)
+
+        if not _has_port_rule("80"):
+            run_cmd(
+                "vultr-cli", "firewall", "rule", "create",
+                "--id", group_id,
+                "--ip-type", "v4",
+                "--protocol", "tcp",
+                "--port", "80",
+                "--subnet", "0.0.0.0",
+                "--size", "0",
+            )
+            log("Added HTTP (port 80) firewall rule")
+
+        if not _has_port_rule("443"):
+            run_cmd(
+                "vultr-cli", "firewall", "rule", "create",
+                "--id", group_id,
+                "--ip-type", "v4",
+                "--protocol", "tcp",
+                "--port", "443",
+                "--subnet", "0.0.0.0",
+                "--size", "0",
+            )
+            log("Added HTTPS (port 443) firewall rule")
+
+        my_ip = _get_my_ip()
+        if my_ip:
+            ssh_subnet = my_ip
+            ssh_size = 32
+        else:
+            ssh_subnet = "0.0.0.0"
+            ssh_size = 0
+
+        ssh_rules = [r for r in rules if str(r.get("port")) == "22"]
+        needs_new_ssh = False
+
+        if ssh_rules:
+            existing = ssh_rules[0]
+            if (
+                existing.get("subnet") != ssh_subnet
+                or existing.get("subnet_size") != ssh_size
+            ):
+                run_cmd(
+                    "vultr-cli", "firewall", "rule", "delete",
+                    group_id, str(existing["id"]),
+                )
+                log(f"Removed outdated SSH rule")
+                needs_new_ssh = True
+        else:
+            needs_new_ssh = True
+
+        if needs_new_ssh:
+            run_cmd(
+                "vultr-cli", "firewall", "rule", "create",
+                "--id", group_id,
+                "--ip-type", "v4",
+                "--protocol", "tcp",
+                "--port", "22",
+                "--subnet", ssh_subnet,
+                "--size", str(ssh_size),
+            )
+            log(f"Added SSH (port 22) firewall rule for '{ssh_subnet}/{ssh_size}'")
+
+        return group_id
+
+    def create_instance(
+        self, name: str, region: str, vm_size: str, iam_role: str | None = None
+    ) -> dict:
+        """Create a new Vultr instance.
+
+        :param name: The label for the new instance
+        :param region: The Vultr region slug (e.g., 'syd')
+        :param vm_size: The plan ID (e.g., 'vc2-1c-1gb')
+        :param iam_role: Unused for Vultr (AWS compatibility parameter)
+        :return: Dictionary with 'id' and 'ip' keys for the created instance
+        :raises SystemExit: If instance already exists, creation fails, or timeout
+        """
+        self.validate_auth()
+
+        if self.instance_exists(name):
+            error(f"Instance '{name}' already exists")
+
+        ssh_key_id = self._ensure_ssh_key()
+        firewall_group_id = self._ensure_firewall_group()
+
+        log(f"Creating Vultr instance '{name}' ({vm_size}) in '{region}'...")
+        run_cmd(
+            "vultr-cli", "instance", "create",
+            "--label", name,
+            "--region", region,
+            "--plan", vm_size,
+            "--os", str(self.os_id),
+            "--ssh-keys", ssh_key_id,
+            "--firewall-group", firewall_group_id,
+        )
+
+        result = run_cmd_json("vultr-cli", "instance", "list")
+        instances = result.get("instances") or []
+        inst = next((i for i in instances if i["label"] == name), None)
+        if not inst:
+            error(f"Failed to find newly created instance '{name}'")
+        instance_id = inst["id"]
+
+        log("Waiting for instance to become active...")
+        start = time.time()
+        while time.time() - start < 300:
+            result = run_cmd_json("vultr-cli", "instance", "get", instance_id)
+            inst = result["instance"]
+            if (
+                inst["status"] == "active"
+                and inst.get("main_ip")
+                and inst["main_ip"] != "0.0.0.0"
+            ):
+                return {"id": instance_id, "ip": inst["main_ip"]}
+            if inst["status"] in ("stopped", "error"):
+                error(f"Instance entered state '{inst['status']}'")
+            time.sleep(10)
+        error("Timeout waiting for instance to become active")
+
+    def delete_instance(self, instance_id: str) -> None:
+        """Delete a Vultr instance by ID.
+
+        :param instance_id: The instance ID to delete
+        :raises SystemExit: If deletion fails
+        """
+        self.validate_auth()
+        run_cmd("vultr-cli", "instance", "delete", str(instance_id))
+
+    def list_instances(self) -> list[dict]:
+        """List all Vultr instances in the account.
+
+        :return: List of dictionaries with 'name', 'ip', 'status', and 'region' keys
+        :raises SystemExit: If authentication fails
+        """
+        self.validate_auth()
+        result = run_cmd_json("vultr-cli", "instance", "list")
+        instances = result.get("instances") or []
+        return [
+            {
+                "name": i["label"],
+                "ip": i["main_ip"],
+                "status": i["status"],
+                "region": i["region"],
+            }
+            for i in instances
+        ]
+
+    def setup_dns(self, domain: str, ip: str) -> None:
+        """Stub: Vultr DNS management not implemented.
+
+        :param domain: Domain to configure
+        :param ip: IP address to point domain to
+        """
+        warn(
+            f"Vultr DNS management not implemented. "
+            f"Configure DNS manually to point '{domain}' to '{ip}'."
+        )
+
+    def cleanup_resources(self, *, dry_run: bool = True) -> None:
+        """Cleanup orphaned firewall groups not attached to any instance.
+
+        :param dry_run: Show what would be deleted without deleting
+        """
+        self.validate_auth()
+
+        result = run_cmd_json("vultr-cli", "firewall", "group", "list")
+        groups = result.get("firewall-groups") or []
+        managed = [
+            g for g in groups
+            if g.get("description", "").startswith("deploy-vm")
+        ]
+
+        inst_result = run_cmd_json("vultr-cli", "instance", "list")
+        instances = inst_result.get("instances") or []
+        used_group_ids = {
+            i["firewall_group_id"]
+            for i in instances
+            if i.get("firewall_group_id")
+        }
+
+        for group in managed:
+            group_id = group["id"]
+            description = group.get("description", "")
+            if group_id not in used_group_ids:
+                if dry_run:
+                    log(
+                        f"[DRY RUN] Would delete orphaned firewall group: "
+                        f"'{description}' ('{group_id}')"
+                    )
+                else:
+                    run_cmd("vultr-cli", "firewall", "group", "delete", group_id)
+                    log(f"Deleted firewall group: '{description}' ('{group_id}')")
+
+        if dry_run:
+            log("Run with --no-dry-run to actually delete resources")
+
+
 def check_aws_auth(profile: str | None = None) -> None:
     """Validate AWS credentials, fail fast with clear error if expired or invalid.
 
@@ -1124,15 +1482,17 @@ def get_provider(
     if provider is None:
         load_dotenv()
         provider = os.getenv("DEPLOY_VM_PROVIDER", "digitalocean")
-        if provider not in ["digitalocean", "aws"]:
+        if provider not in ["digitalocean", "aws", "vultr"]:
             log(
                 f"[WARN] Invalid DEPLOY_VM_PROVIDER '{provider}', using 'digitalocean'"
             )
             provider = "digitalocean"
-    elif provider not in ["digitalocean", "aws"]:
-        error(f"Unknown provider: {provider}. Available: digitalocean, aws")
+    elif provider not in ["digitalocean", "aws", "vultr"]:
+        error(f"Unknown provider: {provider}. Available: digitalocean, aws, vultr")
 
     if provider == "digitalocean":
         return DigitalOceanProvider(os_image=os_image, region=region, vm_size=vm_size)
+    elif provider == "vultr":
+        return VultrProvider(os_image=os_image, region=region, vm_size=vm_size)
     else:  # aws
         return AWSProvider(os_image=os_image, region=region, vm_size=vm_size, aws_profile=aws_profile)

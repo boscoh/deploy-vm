@@ -26,8 +26,8 @@ def error(msg: str):
 def get_ssh_user(provider_name: str) -> str:
     """Get default SSH user for cloud provider.
 
-    :param provider_name: Cloud provider (aws or digitalocean)
-    :return: SSH username (ubuntu for AWS, root for DigitalOcean)
+    :param provider_name: Cloud provider (aws, digitalocean, or vultr)
+    :return: SSH username (ubuntu for AWS, root for DigitalOcean and Vultr)
     """
     return "ubuntu" if provider_name == "aws" else "root"
 

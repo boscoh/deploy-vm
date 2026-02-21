@@ -19,7 +19,7 @@ from rich import print
 from .providers import check_aws_auth
 from .utils import error, log, warn
 
-ProviderName = Literal["digitalocean", "aws"]
+ProviderName = Literal["digitalocean", "aws", "vultr"]
 
 SSH_TIMEOUT = 120
 HTTP_VERIFY_RETRIES = 6

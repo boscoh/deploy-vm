@@ -714,6 +714,7 @@ def setup_nginx_ssl(
             sudo certbot --nginx -d {domain} -d www.{domain} \\
                 --non-interactive --agree-tos --email {email} --redirect
         fi
+        sudo systemctl enable --now certbot.timer
     """).strip()
     ssh_script(ip, ssl_script, user=ssh_user)
     log(f"SSL configured! 'https://{domain}'")

@@ -1099,6 +1099,8 @@ class VultrProvider:
     """Cloud provider implementation for Vultr VPS."""
 
     VM_SIZES = [
+        "vc2-1c-0.5gb-v6",
+        "vc2-1c-0.5gb",
         "vc2-1c-1gb",
         "vc2-1c-2gb",
         "vc2-2c-4gb",

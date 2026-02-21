@@ -21,7 +21,7 @@ from .utils import error, log, warn
 
 ProviderName = Literal["digitalocean", "aws", "vultr"]
 
-SSH_TIMEOUT = 120
+SSH_TIMEOUT = 300
 HTTP_VERIFY_RETRIES = 6
 HTTP_VERIFY_DELAY = 5
 DNS_VERIFY_RETRIES = 30
@@ -227,7 +227,7 @@ def get_instance_apps(instance: dict) -> list[dict]:
 
 
 def add_app_to_instance(
-    instance: dict, app_name: str, app_type: str, port: int | None = None
+    instance: dict, app_name: str, app_type: str, port: int | None = None, **extra
 ):
     """Add or update app in instance with conflict detection.
 
@@ -235,6 +235,7 @@ def add_app_to_instance(
     :param app_name: Application name
     :param app_type: App type (nuxt or fastapi)
     :param port: Port number (optional)
+    :param extra: Additional fields to store on the app (source, command, domain, etc.)
     """
     if "apps" not in instance:
         instance["apps"] = []
@@ -267,6 +268,7 @@ def add_app_to_instance(
             existing_app["port"] = port
         elif "port" in existing_app and old_port is not None:
             pass
+        existing_app.update({k: v for k, v in extra.items() if v is not None})
 
         log(f"Updated app '{app_name}' ('{old_type}' -> '{app_type}')")
     else:
@@ -281,6 +283,7 @@ def add_app_to_instance(
         app_data = {"name": app_name, "type": app_type}
         if port is not None:
             app_data["port"] = port
+        app_data.update({k: v for k, v in extra.items() if v is not None})
         instance["apps"].append(app_data)
         log(f"Added app '{app_name}' ('{app_type}')")
 
@@ -390,7 +393,8 @@ def wait_for_ssh(ip: str, user: str = "deploy", timeout: int = SSH_TIMEOUT):
                 log("SSH ready")
                 return
         except Exception:
-            pass
+            elapsed = int(time.time() - start)
+            log(f"SSH not ready yet ({elapsed}s elapsed), retrying...")
         time.sleep(5)
     error(f"SSH timeout after '{timeout}s'")
 

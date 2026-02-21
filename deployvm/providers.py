@@ -1219,7 +1219,7 @@ class VultrProvider:
         group_name = "deploy-vm-web"
 
         result = run_cmd_json("vultr-cli", "firewall", "group", "list")
-        groups = result.get("firewall-groups") or []
+        groups = result.get("firewall_groups") or []
         group = next(
             (g for g in groups if g.get("description") == group_name), None
         )
@@ -1234,7 +1234,7 @@ class VultrProvider:
                 "--description", group_name,
             )
             result = run_cmd_json("vultr-cli", "firewall", "group", "list")
-            groups = result.get("firewall-groups") or []
+            groups = result.get("firewall_groups") or []
             group = next(
                 (g for g in groups if g.get("description") == group_name), None
             )
@@ -1251,8 +1251,7 @@ class VultrProvider:
 
         if not _has_port_rule("80"):
             run_cmd(
-                "vultr-cli", "firewall", "rule", "create",
-                "--id", group_id,
+                "vultr-cli", "firewall", "rule", "create", group_id,
                 "--ip-type", "v4",
                 "--protocol", "tcp",
                 "--port", "80",
@@ -1263,8 +1262,7 @@ class VultrProvider:
 
         if not _has_port_rule("443"):
             run_cmd(
-                "vultr-cli", "firewall", "rule", "create",
-                "--id", group_id,
+                "vultr-cli", "firewall", "rule", "create", group_id,
                 "--ip-type", "v4",
                 "--protocol", "tcp",
                 "--port", "443",
@@ -1301,8 +1299,7 @@ class VultrProvider:
 
         if needs_new_ssh:
             run_cmd(
-                "vultr-cli", "firewall", "rule", "create",
-                "--id", group_id,
+                "vultr-cli", "firewall", "rule", "create", group_id,
                 "--ip-type", "v4",
                 "--protocol", "tcp",
                 "--port", "22",
@@ -1414,7 +1411,7 @@ class VultrProvider:
         self.validate_auth()
 
         result = run_cmd_json("vultr-cli", "firewall", "group", "list")
-        groups = result.get("firewall-groups") or []
+        groups = result.get("firewall_groups") or []
         managed = [
             g for g in groups
             if g.get("description", "").startswith("deploy-vm")

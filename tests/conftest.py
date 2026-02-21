@@ -55,6 +55,6 @@ def live_instance(provider_name):
             current_data = load_instance(name)
             p2 = get_provider(provider_name)
             p2.delete_instance(current_data["id"])
-        except Exception:
+        except (Exception, SystemExit):
             pass
         Path(f"{name}.instance.json").unlink(missing_ok=True)

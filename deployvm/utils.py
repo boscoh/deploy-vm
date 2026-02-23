@@ -41,7 +41,7 @@ def resolve_app_name(
     """Resolve app name when multiple apps exist on instance.
 
     :param apps: List of app dicts with 'name' and 'type' keys
-    :param app_type: App type to filter by (nuxt or fastapi)
+    :param app_type: App type to filter by (npm or uv)
     :param app_name: Explicit app name (optional)
     :param fallback: Fallback name if no apps found
     :return: Resolved app name

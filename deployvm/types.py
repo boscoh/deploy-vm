@@ -3,7 +3,7 @@
 from typing import Literal, TypedDict
 
 ProviderName = Literal["digitalocean", "aws"]
-AppType = Literal["nuxt", "fastapi"]
+AppType = Literal["npm", "uv"]
 
 
 class AppInfo(TypedDict, total=False):

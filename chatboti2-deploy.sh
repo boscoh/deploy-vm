@@ -7,7 +7,7 @@ set -a
 source "$SCRIPT_DIR/.env"
 set +a
 
-uv run deployvm fastapi deploy \
+uv run deployvm uv deploy \
     chatboti2 \
     "$SCRIPT_DIR/../chatboti" \
     "uv run chatboti server --port 8000" \
@@ -20,6 +20,6 @@ uv run deployvm fastapi deploy \
 
 
 echo "Useful commands:"
-echo "  Status:  uv run deployvm fastapi status chatboti"
-echo "  Logs:    uv run deployvm fastapi logs chatboti"
+echo "  Status:  uv run deployvm uv status chatboti"
+echo "  Logs:    uv run deployvm uv logs chatboti"
 echo "  Verify:  uv run deployvm instance verify chatboti"

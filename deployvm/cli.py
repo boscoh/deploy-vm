@@ -45,18 +45,12 @@ app = cyclopts.App(
 )
 
 instance_app = cyclopts.App(name="instance", help="Manage cloud instances", sort_key=1)
-nginx_app = cyclopts.App(name="nginx", help="Configure nginx reverse proxy", sort_key=2)
-npm_app = cyclopts.App(name="npm", help="Deploy and manage npm apps", sort_key=3)
-uv_app = cyclopts.App(
-    name="uv", help="Deploy and manage uv Python apps", sort_key=4
-)
-dns_app = cyclopts.App(name="dns", help="Manage DNS records", sort_key=5)
+npm_app = cyclopts.App(name="npm", help="Deploy and manage npm apps", sort_key=2)
+uv_app = cyclopts.App(name="uv", help="Deploy and manage uv Python apps", sort_key=3)
 
 app.command(instance_app)
-app.command(nginx_app)
 app.command(npm_app)
 app.command(uv_app)
-app.command(dns_app)
 
 
 @instance_app.command(name="create")
@@ -224,24 +218,6 @@ def list_instances(
         print(f"  {name}  {ip}  {region}  {i['status']}")
 
 
-@instance_app.command(name="apps")
-def list_instance_apps(target: str):
-    """List apps deployed on the specified instance.
-
-    :param target: Instance name or IP address
-    """
-    instance = resolve_instance(target)
-    apps = get_instance_apps(instance)
-
-    if not apps:
-        print(f"No apps tracked for instance '{target}'")
-        return
-
-    print(f"Apps on {target} ({instance['ip']}):")
-    for app in apps:
-        port_info = f" (port {app.get('port', '?')})" if app.get("port") else ""
-        print(f"  - {app['name']}: {app['type']}{port_info}")
-
 
 @instance_app.command(name="cleanup")
 def cleanup_resources(
@@ -276,18 +252,44 @@ def verify_command(
     verify_instance(name, domain=domain, ssh_user=ssh_user)
 
 
-def _select_nginx_app(instance: dict, port: int | None) -> tuple[int, dict]:
-    """Select app entry from instance by port or index, returning resolved port and app data.
+def _ensure_ssh_reachable(ip: str, ssh_user: str, instance: dict) -> None:
+    """Check SSH reachability, auto-updating AWS security group IP if needed.
+
+    :param ip: Instance IP address
+    :param ssh_user: SSH user for connection
+    :param instance: Instance data dictionary
+    """
+    if check_instance_reachable(ip, ssh_user):
+        return
+    if instance.get("provider") == "aws":
+        log("SSH unreachable — updating AWS security group SSH rule to current IP...")
+        from .providers import AWSProvider
+        p = AWSProvider(aws_profile=instance.get("aws_profile"), region=instance.get("region"))
+        p.update_ssh_ip()
+        if check_instance_reachable(ip, ssh_user):
+            return
+    error(f"Instance '{ip}' is not reachable via SSH. Please verify the instance is running and SSH access is configured.")
+
+
+def _select_nginx_app(instance: dict, port: int | None, app_name: str | None = None) -> tuple[int, dict]:
+    """Select app entry from instance by app_name, port, or single-app fallback.
 
     :param instance: Instance data dictionary
     :param port: Explicit port to match against app entries (optional)
+    :param app_name: Explicit app name to match (optional)
     :return: (resolved_port, app_data) where app_data is matched app dict or {}
     """
     apps = instance.get("apps") or []
 
     if not apps:
-        # Raw IP target with no app entries — use fallback behaviour
         return port or 3000, {}
+
+    if app_name is not None:
+        matched = next((a for a in apps if a.get("name") == app_name), None)
+        if matched is None:
+            app_list = ", ".join(a.get("name", "?") for a in apps)
+            error(f"No app named '{app_name}'. Available: {app_list}")
+        return matched.get("port") or port or 3000, matched
 
     if port is not None:
         matched = next((a for a in apps if a.get("port") == port), None)
@@ -302,49 +304,17 @@ def _select_nginx_app(instance: dict, port: int | None) -> tuple[int, dict]:
     app_list = ", ".join(
         f"{a.get('name', '?')} (port {a.get('port', '?')})" for a in apps
     )
-    error(f"Multiple apps found: {app_list}. Use --port to specify which app to configure.")
+    error(f"Multiple apps found: {app_list}. Use --app-name or --port to specify which app.")
 
 
-@nginx_app.command(name="ip")
-def nginx_ip_command(
-    target: str,
-    *,
-    port: int | None = None,
-    outgoing_port: int = 80,
-    static_dir: str | None = None,
-    ssh_user: str = "deploy",
-):
-    """Setup nginx for IP-only access (no SSL certificate).
 
-    :param target: Instance name or IP address
-    :param port: Application port (default: read from instance, fallback 3000)
-    :param outgoing_port: External port nginx listens on (default: 80)
-    :param static_dir: Static files directory to serve directly
-    :param ssh_user: SSH user for remote connection
-    """
-    instance = resolve_instance(target)
-    ip = instance["ip"]
-    resolved_port, app_data = _select_nginx_app(instance, port)
-
-    # Read static_dir from app entry as fallback
-    static_dir = static_dir or app_data.get("static_dir")
-
-    # Persist static_dir into the app entry for named instances
-    if static_dir and app_data and not is_valid_ip(target):
-        app_data["static_dir"] = static_dir
-        save_instance(target, instance)
-
-    app_name = app_data.get("name", "default") if app_data else "default"
-    provider = get_provider(instance.get("provider"), aws_profile=instance.get("aws_profile"))
-    setup_nginx_ip(ip, app_name=app_name, port=resolved_port, outgoing_port=outgoing_port, static_dir=static_dir, ssh_user=ssh_user, provider=provider)
-
-
-@nginx_app.command(name="ssl")
+@app.command(name="ssl", sort_key=4)
 def nginx_ssl_command(
     target: str,
     domain: str,
     email: str,
     *,
+    app_name: str | None = None,
     port: int | None = None,
     outgoing_port: int = 443,
     static_dir: str | None = None,
@@ -357,7 +327,8 @@ def nginx_ssl_command(
     :param target: Instance name or IP address
     :param domain: Domain name for SSL certificate
     :param email: Email for Let's Encrypt registration
-    :param port: Application port (default: read from instance, fallback 3000)
+    :param app_name: App name to configure SSL for (required if multiple apps on instance)
+    :param port: App port (alternative to --app-name; default: read from instance)
     :param outgoing_port: External HTTPS port nginx listens on (default: 443)
     :param static_dir: Static files directory to serve directly
     :param skip_dns: Skip DNS validation check
@@ -366,7 +337,7 @@ def nginx_ssl_command(
     """
     instance = resolve_instance(target)
     ip = instance["ip"]
-    resolved_port, app_data = _select_nginx_app(instance, port)
+    resolved_port, app_data = _select_nginx_app(instance, port, app_name)
 
     # Read static_dir from app entry as fallback
     static_dir = static_dir or app_data.get("static_dir")
@@ -378,6 +349,17 @@ def nginx_ssl_command(
 
     provider_name: ProviderName = provider or instance.get("provider", "digitalocean")
     aws_profile = instance.get("aws_profile") if provider_name == "aws" else None
+    p = get_provider(provider_name, aws_profile=aws_profile)
+
+    if not skip_dns:
+        # Create DNS zone + A records, then print nameservers as a reminder
+        log(f"Setting up DNS zone for '{domain}' -> '{ip}'...")
+        p.setup_dns(domain, ip)
+        nameservers = p.get_nameservers(domain)
+        log(f"Nameservers for '{domain}' (set these at your registrar if not already done):")
+        for ns in nameservers:
+            print(f"  {ns}")
+
     setup_nginx_ssl(
         ip,
         domain,
@@ -385,10 +367,11 @@ def nginx_ssl_command(
         port=resolved_port,
         outgoing_port=outgoing_port,
         static_dir=static_dir,
-        skip_dns=skip_dns,
+        skip_dns=True,  # DNS already handled above
         ssh_user=ssh_user,
         provider_name=provider_name,
         aws_profile=aws_profile,
+        provider=p,
     )
 
 
@@ -434,9 +417,7 @@ def sync_npm(
 
     ssh_user = get_ssh_user(provider)
 
-    # Check if instance is reachable
-    if not check_instance_reachable(ip, ssh_user):
-        error(f"Instance '{ip}' is not reachable via SSH. Please verify the instance is running and SSH access is configured.")
+    _ensure_ssh_reachable(ip, ssh_user, instance)
 
     apps = [a for a in get_instance_apps(instance) if a["type"] == "npm"]
     fallback = target if not is_valid_ip(target) else "npm"
@@ -545,7 +526,6 @@ def deploy_npm(
     swap_size: str = "4G",
     node_version: int = 20,
     local_build: bool = True,
-    no_ssl: bool = False,
     iam_role: str | None = None,
     start_script: str = ".output/server/index.mjs",
     build_command: str = "npm run build",
@@ -555,15 +535,15 @@ def deploy_npm(
     """Deploy npm app with full infrastructure setup.
 
     Creates a new cloud instance (if needed), sets up the server, deploys the app,
-    and configures nginx with SSL. This is the complete deployment solution.
+    and configures nginx. Omit --domain to deploy with IP-only access (no SSL).
 
     :param name: Instance name (will create {name}.instance.json)
     :param source: Local source directory path
-    :param domain: Domain name for SSL setup (required unless --no-ssl)
-    :param email: Email for Let's Encrypt SSL certificate (required unless --no-ssl)
+    :param domain: Domain name for SSL setup (omit for IP-only access)
+    :param email: Email for Let's Encrypt SSL certificate (required with --domain)
     :param user: Remote user to run the app as (default: deploy)
     :param port: Application port (default: 3000)
-    :param outgoing_port: External port nginx listens on (default: 80 for --no-ssl, 443 for SSL)
+    :param outgoing_port: External port nginx listens on (default: 80 without SSL, 443 with SSL)
     :param app_name: Name of the app (default: npm)
     :param provider: Cloud provider (aws or digitalocean, default: digitalocean)
     :param region: Cloud provider region (default: syd1)
@@ -572,7 +552,6 @@ def deploy_npm(
     :param swap_size: Swap file size (default: 4G)
     :param node_version: Node.js version to use (default: 20)
     :param local_build: Build locally instead of on server
-    :param no_ssl: Skip SSL/domain setup, use IP-only access
     :param iam_role: AWS only: IAM role name for instance profile (default: deploy-vm-bedrock)
     :param start_script: Script or file PM2 runs, or "npm run <cmd>" (default: .output/server/index.mjs)
     :param build_command: Build command to run (default: npm run build)
@@ -581,8 +560,10 @@ def deploy_npm(
         Defaults to {dist_dir}/public (Nuxt). Use {dist_dir}/client for SvelteKit/Remix,
         or {dist_dir} for a plain Vite app. Pass empty string to disable static serving.
     """
-    if not no_ssl and (not domain or not email):
-        error("--domain and --email are required unless --no-ssl is set")
+    no_ssl = not domain
+
+    if domain and not email:
+        error("--email is required when --domain is set")
 
     resolved_outgoing_port = outgoing_port if outgoing_port is not None else (80 if no_ssl else 443)
 
@@ -608,8 +589,7 @@ def deploy_npm(
     provider_name = data.get("provider", "digitalocean")
     npm_ssh_user = get_ssh_user(provider_name)
 
-    if not check_instance_reachable(ip, npm_ssh_user):
-        error(f"Instance '{name}' at '{ip}' is not reachable via SSH. Verify the instance exists and is running.")
+    _ensure_ssh_reachable(ip, npm_ssh_user, data)
 
     if "user" not in data or data["user"] != user:
         data["user"] = user
@@ -706,9 +686,7 @@ def sync_uv(
 
     ssh_user = get_ssh_user(provider)
 
-    # Check if instance is reachable
-    if not check_instance_reachable(ip, ssh_user):
-        error(f"Instance '{ip}' is not reachable via SSH. Please verify the instance is running and SSH access is configured.")
+    _ensure_ssh_reachable(ip, ssh_user, instance)
 
     apps = [a for a in get_instance_apps(instance) if a["type"] == "uv"]
     fallback = target if not is_valid_ip(target) else "uv"
@@ -807,22 +785,21 @@ def deploy_uv(
     vm_size: str | None = None,
     os_image: str | None = None,
     swap_size: str = "4G",
-    no_ssl: bool = False,
     iam_role: str | None = None,
 ):
     """Deploy uv app with full infrastructure setup.
 
     Creates a new cloud instance (if needed), sets up the server, deploys the app,
-    and configures nginx with SSL. This is the complete deployment solution.
+    and configures nginx. Omit --domain to deploy with IP-only access (no SSL).
 
     :param name: Instance name (will create {name}.instance.json)
     :param source: Local source directory path
     :param command: Command to run (must start with "uv", e.g., "uv run --no-sync uvicorn app:app --host 0.0.0.0 --port 8000 --workers 2")
-    :param domain: Domain name for SSL setup (required unless --no-ssl)
-    :param email: Email for Let's Encrypt SSL certificate (required unless --no-ssl)
+    :param domain: Domain name for SSL setup (omit for IP-only access)
+    :param email: Email for Let's Encrypt SSL certificate (required with --domain)
     :param user: Remote user to run the app as (default: deploy)
     :param port: Port number for the app (default: 8000)
-    :param outgoing_port: External port nginx listens on (default: 80 for --no-ssl, 443 for SSL)
+    :param outgoing_port: External port nginx listens on (default: 80 without SSL, 443 with SSL)
     :param app_name: Name of the app (default: uv)
     :param static_subdir: Subdirectory for static files to serve directly via nginx
     :param provider: Cloud provider (aws or digitalocean, default: digitalocean)
@@ -830,11 +807,12 @@ def deploy_uv(
     :param vm_size: Instance size (AWS: t3.micro, t3.small, etc. | DO: s-1vcpu-1gb, s-2vcpu-2gb, etc.)
     :param os_image: OS image name/ID
     :param swap_size: Swap file size (default: 4G)
-    :param no_ssl: Skip SSL/domain setup, use IP-only access
     :param iam_role: AWS only: IAM role name for instance profile (default: deploy-vm-bedrock)
     """
-    if not no_ssl and (not domain or not email):
-        error("--domain and --email are required unless --no-ssl is set")
+    no_ssl = not domain
+
+    if domain and not email:
+        error("--email is required when --domain is set")
 
     resolved_outgoing_port = outgoing_port if outgoing_port is not None else (80 if no_ssl else 443)
 
@@ -924,73 +902,29 @@ def deploy_uv(
         log(f"Done! https://{domain}{port_suffix}")
 
 
-@dns_app.command(name="nameservers")
+@app.command(name="nameservers", sort_key=5)
 def get_nameservers(
     domain: str,
     *,
     provider: ProviderName | None = None,
 ):
-    """Get nameservers for a domain (creates hosted zone if needed for AWS).
+    """Get nameservers to set at your domain registrar.
 
-    For AWS: Creates a Route53 hosted zone if it doesn't exist, then returns nameservers.
-    For DigitalOcean: Returns standard DigitalOcean nameservers.
+    For AWS: creates a Route53 hosted zone if it doesn't exist, then returns its nameservers.
+    For DigitalOcean and Vultr: returns the standard nameservers.
 
     :param domain: Domain name (e.g., example.com)
-    :param provider: Cloud provider (aws or digitalocean)
+    :param provider: Cloud provider (aws, digitalocean, or vultr)
     """
     p = get_provider(provider)
+    nameservers = p.get_nameservers(domain)
 
-    if p.provider_name == "aws":
-        import time
+    print(f"Nameservers for {domain} ({p.provider_name}):")
+    for ns in nameservers:
+        print(f"  {ns}")
+    print(f"\nSet these at your domain registrar under DNS/Nameserver settings for '{domain}'.")
 
-        p.validate_auth()
-        route53 = p._get_route53_client()
 
-        response = route53.list_hosted_zones()
-        zone_id = None
-        zone_name = None
-
-        for zone in response["HostedZones"]:
-            if zone["Name"] == f"{domain}." or zone["Name"] == domain:
-                zone_id = zone["Id"]
-                zone_name = zone["Name"]
-                break
-
-        if not zone_id:
-            log(f"Creating Route53 hosted zone for '{domain}'...")
-            create_response = route53.create_hosted_zone(
-                Name=domain,
-                CallerReference=str(int(time.time() * 1000)),
-            )
-            zone_id = create_response["HostedZone"]["Id"]
-            zone_name = create_response["HostedZone"]["Name"]
-            log(f"Created hosted zone: '{zone_id}'")
-
-        zone_response = route53.get_hosted_zone(Id=zone_id)
-        nameservers = zone_response["DelegationSet"]["NameServers"]
-
-        print(f"Route53 Hosted Zone: {zone_name}")
-        print(f"Zone ID: {zone_id}")
-        print("\nNameservers:")
-        for ns in nameservers:
-            print(f"  {ns}")
-
-        print("\nConfigure these nameservers at your domain registrar:")
-        print("  1. Log in to your domain registrar (GoDaddy, Namecheap, etc.)")
-        print(f"  2. Find DNS/Nameserver settings for {domain}")
-        print("  3. Replace existing nameservers with the ones listed above")
-        print("  4. Wait 24-48 hours for DNS propagation")
-
-    elif p.provider_name == "digitalocean":
-        print("DigitalOcean DNS Nameservers:")
-        print("  ns1.digitalocean.com")
-        print("  ns2.digitalocean.com")
-        print("  ns3.digitalocean.com")
-        print("\nConfigure these nameservers at your domain registrar:")
-        print("  1. Log in to your domain registrar (GoDaddy, Namecheap, etc.)")
-        print(f"  2. Find DNS/Nameserver settings for {domain}")
-        print("  3. Replace existing nameservers with the ones listed above")
-        print("  4. Wait 24-48 hours for DNS propagation")
 
 
 if __name__ == "__main__":

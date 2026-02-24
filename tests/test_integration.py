@@ -29,6 +29,11 @@ FASTAPI_COMMAND = "uv run uvicorn app:app --host 0.0.0.0 --port 8000"
 APP_NAME = "testapp"
 APP_PORT = 8000
 
+TESTAPP2_DIR = Path(__file__).parent / "fixtures" / "testapp2"
+FASTAPI_COMMAND2 = "uv run uvicorn app:app --host 0.0.0.0 --port 8001"
+APP2_NAME = "testapp2"
+APP2_PORT = 8001
+
 
 def _make_fastapi(live_instance: str) -> FastAPIApp:
     instance = load_instance(live_instance)
@@ -39,6 +44,18 @@ def _make_fastapi(live_instance: str) -> FastAPIApp:
         app_name=APP_NAME,
         port=APP_PORT,
         command=FASTAPI_COMMAND,
+    )
+
+
+def _make_fastapi2(live_instance: str) -> FastAPIApp:
+    instance = load_instance(live_instance)
+    return FastAPIApp(
+        instance,
+        instance.get("provider", "vultr"),
+        user=instance.get("user", "deploy"),
+        app_name=APP2_NAME,
+        port=APP2_PORT,
+        command=FASTAPI_COMMAND2,
     )
 
 
@@ -71,6 +88,29 @@ def test_02_deploy(live_instance):
     )
     data = json.loads(response_raw)
     assert data["version"] == 1
+
+
+@pytest.mark.integration
+def test_02b_deploy_second_app(live_instance):
+    """Second FastAPI app deploys on port 8001; both apps respond independently."""
+    fastapi2 = _make_fastapi2(live_instance)
+    result = fastapi2.sync(str(TESTAPP2_DIR))
+    assert result is True, "Expected full sync on first deploy of second app"
+
+    instance = load_instance(live_instance)
+    status = ssh(instance["ip"], f"sudo supervisorctl status {APP2_NAME}", user="deploy")
+    assert "RUNNING" in status, f"Supervisord not RUNNING for second app: {status}"
+
+    # First app still running
+    response1 = ssh(instance["ip"], f"curl -sf http://localhost:{APP_PORT}/", user="deploy")
+    data1 = json.loads(response1)
+    assert data1["version"] == 1
+
+    # Second app running independently
+    response2 = ssh(instance["ip"], f"curl -sf http://localhost:{APP2_PORT}/", user="deploy")
+    data2 = json.loads(response2)
+    assert data2["version"] == 1
+    assert data2["app"] == "testapp2"
 
 
 @pytest.mark.integration

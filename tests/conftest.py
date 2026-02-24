@@ -9,19 +9,40 @@ from deployvm.server import load_instance, save_instance, setup_server, wait_for
 from deployvm.utils import get_ssh_user
 
 MAX_INSTANCE_RETRIES = 5
+ALL_PROVIDERS = ["digitalocean", "vultr", "aws"]
 
 
 def pytest_addoption(parser):
     parser.addoption(
         "--provider",
         default="vultr",
-        help="Cloud provider for integration tests (default: vultr)",
+        help="Cloud provider for integration tests (default: vultr, use 'all' to run on all authenticated providers)",
     )
 
 
-@pytest.fixture(scope="session")
-def provider_name(request):
-    return request.config.getoption("--provider")
+def _get_available_providers() -> list[str]:
+    """Return providers that pass validate_auth."""
+    available = []
+    for name in ALL_PROVIDERS:
+        try:
+            p = get_provider(name)
+            p.validate_auth()
+            available.append(name)
+        except (SystemExit, Exception):
+            pass
+    return available
+
+
+def pytest_generate_tests(metafunc):
+    if "provider_name" in metafunc.fixturenames:
+        provider = metafunc.config.getoption("--provider")
+        if provider == "all":
+            providers = _get_available_providers()
+            if not providers:
+                pytest.skip("No authenticated providers found")
+        else:
+            providers = [provider]
+        metafunc.parametrize("provider_name", providers, scope="session")
 
 
 @pytest.fixture(scope="session")

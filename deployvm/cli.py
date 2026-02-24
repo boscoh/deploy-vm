@@ -526,7 +526,7 @@ def deploy_npm(
     provider: ProviderName = "digitalocean",
     region: str = "syd1",
     vm_size: str = "s-1vcpu-1gb",
-    os_image: str = "ubuntu-24-04-x64",
+    os_image: str = "debian-12-x64",
     swap_size: str = "4G",
     node_version: int = 20,
     local_build: bool = True,
@@ -552,7 +552,7 @@ def deploy_npm(
     :param provider: Cloud provider (aws or digitalocean, default: digitalocean)
     :param region: Cloud provider region (default: syd1)
     :param vm_size: Instance size (AWS: t3.micro, t3.small, etc. | DO: s-1vcpu-1gb, s-2vcpu-2gb, etc.)
-    :param os_image: OS image name/ID (default: ubuntu-24-04-x64)
+    :param os_image: OS image name/ID (default: debian-12-x64)
     :param swap_size: Swap file size (default: 4G)
     :param node_version: Node.js version to use (default: 20)
     :param local_build: Build locally instead of on server

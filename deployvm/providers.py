@@ -117,7 +117,7 @@ class DigitalOceanProvider:
     ):
         self.provider_name: ProviderName = "digitalocean"
         self.region = region or "syd1"
-        self.os_image = os_image or "ubuntu-24-04-x64"
+        self.os_image = os_image or "debian-12-x64"
         self.vm_size = vm_size or "s-1vcpu-1gb"
 
         if self.vm_size not in self.VM_SIZES:
@@ -378,7 +378,7 @@ class AWSProvider:
     ):
         self.provider_name: ProviderName = "aws"
         self.os_image = (
-            os_image or "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"
+            os_image or "debian-12-amd64-*"
         )
         self.vm_size = vm_size or "t3.micro"
         self.aws_config = AWSProvider.get_aws_config(profile=aws_profile)
@@ -542,7 +542,7 @@ class AWSProvider:
                 {"Name": "state", "Values": ["available"]},
                 {"Name": "architecture", "Values": ["x86_64"]},
             ],
-            Owners=["099720109477"],
+            Owners=["136693071363"],
         )
 
         if not response["Images"]:
@@ -1199,8 +1199,8 @@ class VultrProvider:
         "blr",
     ]
 
-    # Ubuntu 24.04 LTS
-    DEFAULT_OS_ID = 2284
+    # Debian 12 bookworm
+    DEFAULT_OS_ID = 2136
 
     def __init__(
         self,

@@ -536,7 +536,7 @@ def create_user(ip: str, user: str = "deploy", ssh_user: str = "root"):
     auth_keys_path = (
         "~/.ssh/authorized_keys"
         if ssh_user == "root"
-        else "/home/ubuntu/.ssh/authorized_keys"
+        else f"/home/{ssh_user}/.ssh/authorized_keys"
     )
 
     script = dedent(f"""

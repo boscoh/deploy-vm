@@ -105,9 +105,9 @@ def get_ssh_user(provider_name: str) -> str:
     """Get default SSH user for cloud provider.
 
     :param provider_name: Cloud provider (aws, digitalocean, or vultr)
-    :return: SSH username (ubuntu for AWS, root for DigitalOcean and Vultr)
+    :return: SSH username (admin for AWS, root for DigitalOcean and Vultr)
     """
-    return "ubuntu" if provider_name == "aws" else "root"
+    return "admin" if provider_name == "aws" else "root"
 
 
 def resolve_app_name(

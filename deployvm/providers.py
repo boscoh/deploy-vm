@@ -445,10 +445,12 @@ class AWSProvider:
                 for section in cfg.sections():
                     if section.startswith("profile "):
                         available_profiles.add(section[8:])
-                    elif section != "default":
+                    else:
                         available_profiles.add(section)
 
         profile_name = profile or os.getenv("AWS_PROFILE")
+        if not profile_name and "default" in available_profiles:
+            profile_name = "default"
         if profile_name:
             if profile_name in available_profiles:
                 aws_config["profile_name"] = profile_name

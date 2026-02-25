@@ -103,3 +103,63 @@ def live_instance(provider_name):
         except (Exception, SystemExit):
             pass
         Path(f"{name}.instance.json").unlink(missing_ok=True)
+
+
+@pytest.fixture(scope="session")
+def npm_live_instance(provider_name):
+    """Separate session-scoped instance for npm integration tests.
+
+    Keeps npm tests isolated from test_integration.py's test_08_delete.
+    """
+    user = "deploy"
+    ssh_user = get_ssh_user(provider_name)
+
+    name = None
+    instance_id = None
+
+    for attempt in range(1, MAX_INSTANCE_RETRIES + 1):
+        name = f"test-npm-{uuid4().hex[:8]}"
+        p = get_provider(provider_name)
+        p.validate_auth()
+
+        print(f"\n[INFO] Creating npm instance (attempt {attempt}/{MAX_INSTANCE_RETRIES})...")
+        result = p.create_instance(name, p.region, p.vm_size)
+        instance_id = result["id"]
+
+        instance_data = {
+            "id": instance_id,
+            "ip": result["ip"],
+            "provider": provider_name,
+            "region": p.region,
+            "vm_size": p.vm_size,
+            "user": user,
+            "apps": [],
+        }
+        save_instance(name, instance_data)
+
+        try:
+            wait_for_ssh(result["ip"], user=ssh_user)
+            setup_server(result["ip"], user=user, ssh_user=ssh_user)
+            break
+        except SystemExit:
+            print(f"[WARN] Instance {name} ({result['ip']}) failed SSH setup, deleting...")
+            try:
+                p2 = get_provider(provider_name)
+                p2.delete_instance(instance_id)
+            except (Exception, SystemExit):
+                pass
+            Path(f"{name}.instance.json").unlink(missing_ok=True)
+            name = None
+            if attempt == MAX_INSTANCE_RETRIES:
+                pytest.fail(f"Failed to get a working npm instance after {MAX_INSTANCE_RETRIES} attempts")
+
+    try:
+        yield name
+    finally:
+        try:
+            current_data = load_instance(name)
+            p2 = get_provider(provider_name)
+            p2.delete_instance(current_data["id"])
+        except (Exception, SystemExit):
+            pass
+        Path(f"{name}.instance.json").unlink(missing_ok=True)

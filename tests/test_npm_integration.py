@@ -23,8 +23,8 @@ NEXT_APP_NAME = "nextapp"
 NEXT_PORT = 3001
 
 
-def _make_nuxt(live_instance: str) -> NpmApp:
-    instance = load_instance(live_instance)
+def _make_nuxt(npm_live_instance: str) -> NpmApp:
+    instance = load_instance(npm_live_instance)
     return NpmApp(
         instance,
         instance.get("provider", "vultr"),
@@ -37,8 +37,8 @@ def _make_nuxt(live_instance: str) -> NpmApp:
     )
 
 
-def _make_next(live_instance: str) -> NpmApp:
-    instance = load_instance(live_instance)
+def _make_next(npm_live_instance: str) -> NpmApp:
+    instance = load_instance(npm_live_instance)
     return NpmApp(
         instance,
         instance.get("provider", "vultr"),
@@ -52,12 +52,12 @@ def _make_next(live_instance: str) -> NpmApp:
 
 
 @pytest.mark.integration
-def test_npm_01_deploy_nuxt(live_instance):
+def test_npm_01_deploy_nuxt(npm_live_instance):
     """Nuxt app deploys via PM2 and responds on localhost:3000."""
-    nuxt = _make_nuxt(live_instance)
+    nuxt = _make_nuxt(npm_live_instance)
     nuxt.sync(str(NUXTAPP_DIR))
 
-    instance = load_instance(live_instance)
+    instance = load_instance(npm_live_instance)
     status = ssh(instance["ip"], f"pm2 describe {NUXT_APP_NAME}", user="deploy")
     assert "online" in status.lower(), f"PM2 not online for nuxtapp: {status}"
 
@@ -71,12 +71,12 @@ def test_npm_01_deploy_nuxt(live_instance):
 
 
 @pytest.mark.integration
-def test_npm_02_deploy_next(live_instance):
+def test_npm_02_deploy_next(npm_live_instance):
     """Next.js app deploys via PM2 on port 3001 and responds on localhost:3001."""
-    next_app = _make_next(live_instance)
+    next_app = _make_next(npm_live_instance)
     next_app.sync(str(NEXTAPP_DIR))
 
-    instance = load_instance(live_instance)
+    instance = load_instance(npm_live_instance)
     status = ssh(instance["ip"], f"pm2 describe {NEXT_APP_NAME}", user="deploy")
     assert "online" in status.lower(), f"PM2 not online for nextapp: {status}"
 
@@ -96,12 +96,12 @@ def test_npm_02_deploy_next(live_instance):
 
 
 @pytest.mark.integration
-def test_npm_03_resync_unchanged_nuxt(live_instance):
+def test_npm_03_resync_unchanged_nuxt(npm_live_instance):
     """Re-sync nuxtapp with unchanged source takes fast path; app still responds."""
-    nuxt = _make_nuxt(live_instance)
+    nuxt = _make_nuxt(npm_live_instance)
     nuxt.sync(str(NUXTAPP_DIR))
 
-    instance = load_instance(live_instance)
+    instance = load_instance(npm_live_instance)
     response_raw = ssh(
         instance["ip"],
         f"curl -sf http://localhost:{NUXT_PORT}/api/health",
